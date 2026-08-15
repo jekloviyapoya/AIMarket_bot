@@ -6,3 +6,4 @@ psycopg2-binary
 flask
 pyjwt
 waitress
+cryptography
