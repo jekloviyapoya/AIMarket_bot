@@ -1,0 +1,24 @@
+# Maxfiy ma'lumotlar — GitHub'ga CHIQMASLIGI shart
+.env
+.env.*
+*.ghtoken
+.ghtoken
+
+# Baza fayllari (Railway volume'da turadi)
+*.db
+*.sqlite
+*.sqlite3
+data/
+/data
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Vaqtinchalik
+*.log
+*.tmp
+.DS_Store

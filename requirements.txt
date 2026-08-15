@@ -1,0 +1,8 @@
+pyTelegramBotAPI
+openpyxl
+qrcode[pil]
+pillow
+psycopg2-binary
+flask
+pyjwt
+waitress
