@@ -8,7 +8,10 @@ SQLite fayliga yo'naltiriladi, `W_*` lug'atlari va keshlar tenant bo'yicha
 ajratiladi, `SUPER_ADMIN_ID`/`BITO_API_KEY` kabi 200+ murojaat `CFG` orqali
 markaziy bazadan olinadi. **Chaqiruv joylari (384 ta SQL) o'zgarmagan.**
 
-⚠️ Python **3.12+** kerak (bot.py da PEP 701 f-string sintaksisi ishlatilgan).
+⚠️ Python **3.12+** kerak — `bot.py` da PEP 701 f-string sintaksisi bor,
+3.11 da umuman kompilyatsiya qilinmaydi. Repo ildizidagi `.python-version`
+fayli buni Railway (Railpack/Nixpacks) uchun qadab qo'yadi. Xohlasangiz
+`RAILPACK_PYTHON_VERSION` o'zgaruvchisi bilan ham berish mumkin — u ustunroq.
 
 | Fayl | Vazifasi |
 |---|---|
