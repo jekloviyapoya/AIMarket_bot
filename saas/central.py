@@ -810,6 +810,9 @@ def recent_log(tid=None, limit=20):
 # ─────────────────────── Havolalar ───────────────────────
 
 MAIN_BOT_USERNAME = os.getenv("MAIN_BOT_USERNAME", "AIMARKETNM_BOT")
+# Litsenziya boti — begona odam asosiy botga kirmoqchi bo'lsa shu yerga
+# yo'naltiriladi (biznes ochish faqat shu bot orqali).
+ADMIN_BOT_USERNAME = os.getenv("ADMIN_BOT_USERNAME", "BMPAINM_BOT")
 
 
 def owner_link(slug):

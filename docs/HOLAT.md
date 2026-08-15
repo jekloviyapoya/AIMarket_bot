@@ -121,6 +121,9 @@ docs/HOLAT.md             shu fayl
       havolasi bilan, Bito kaliti avtomatik aniqlash, do'kon joylashuvi
 - [x] Modul gating — klaviatura filtri + markaziy tekshiruv + "faqat ko'rish"
 - [x] Fon oqimlariga modul yorlig'i (14 ta)
+- [x] **Kirish yopiq** — havolasiz `/start` hech qachon ro'yxatdan o'tkazmaydi
+- [x] Boshliq hodim uchun taklif havolasini o'z akkauntida yaratadi
+      (⚙️ Sozlamalar → 👥 Xodimlar va ballar → 🔗 Hodim taklif havolalari)
 
 ### Yo'l-yo'lakay tuzatilgan kamchiliklar
 
@@ -130,6 +133,10 @@ docs/HOLAT.md             shu fayl
 3. `attach_tenant_routing` boshida noto'g'ri nuqtaga ulangan edi —
    pyTelegramBotAPI 4.x da `func=lambda` filtrlari
    `_run_middlewares_and_handler` ichida, ishchi oqimda baholanadi
+4. **Kirish teshigi:** bizneslar soni 1 bo'lganda `/start` havolasiz
+   kelgan HAR KIMNI avtomatik `employee` qilib bog'lardi va boshliqqa
+   tasdiqlash so'rovi ketardi. Botni nomi bilan topgan begona odam
+   shu yo'l bilan ichkariga so'rov yubora olardi — yopildi
 
 ---
 
@@ -163,6 +170,12 @@ docs/HOLAT.md             shu fayl
 7. **`bot.py` da `for _col in (...)` sikli ikki marta yozilgan**, birinchisining
    tanasi bo'sh (o'lik kod). Haqiqiy ishni ikkinchisi qiladi — tahrirlaganda
    adashmang.
+
+8. **`/start` ga "havolasiz ham kirsin" fallback qo'shmang.** Bir marta
+   `len(tenants)==1` bo'lsa avtomatik bog'lash bor edi — natijada botni
+   qidiruvdan topgan begona odam ro'yxatdan o'ta olardi. Kirish faqat
+   taklif havolasi orqali: ega `?start=<slug>` (telefon bilan), hodim
+   `?start=e-<slug>-<token>` (keyin boshliq tasdig'i).
 
 ---
 

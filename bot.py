@@ -11271,19 +11271,21 @@ def start(message):
     # 🏢 Havola bilan kelgan bo'lsa — ko'p-ijarachi ro'yxatdan o'tish
     if _payload and onboarding_start(message, _payload):
         return
-    # Havolasiz va hech qaysi biznesga bog'lanmagan
+    # 🔒 Havolasiz va hech qaysi biznesga bog'lanmagan — kirish YOPIQ.
+    # Bizneslar soni ahamiyatsiz. Ilgari bitta biznes bo'lganda begona odam
+    # avtomatik "employee" qilib bog'lanardi va boshliqqa tasdiqlash so'rovi
+    # ketardi — bu teshik edi: botni nomi bilan topgan HAR KIM so'rov
+    # yubora olardi. Endi faqat taklif havolasi orqali kiriladi.
     if not _payload and CENTRAL.tenant_of_user(tg_id) is None:
-        _all = CENTRAL.list_tenants()
-        if len(_all) == 1:
-            # Yagona biznes — eski xatti-harakat saqlanadi
-            CENTRAL.bind_user(tg_id, _all[0]["id"], "employee")
-        else:
-            bot.send_message(tg_id,
-                             "👋 Salom! Botga kirish uchun sizga berilgan "
-                             "<b>havola</b> orqali o'ting.\n\n"
-                             "Botni o'z biznesingizga olmoqchi bo'lsangiz — "
-                             "bot egasiga murojaat qiling.", parse_mode="HTML")
-            return
+        bot.send_message(tg_id,
+                         "🔒 <b>Bu bot yopiq.</b>\n\n"
+                         "Kirish faqat taklif havolasi orqali:\n\n"
+                         "• <b>Xodim</b> bo'lsangiz — boshlig'ingizdan taklif "
+                         "havolasini so'rang.\n"
+                         "• <b>Biznes egasi</b> bo'lmoqchi bo'lsangiz — "
+                         f"@{CENTRAL.ADMIN_BOT_USERNAME} ga murojaat qiling.",
+                         parse_mode="HTML")
+        return
     # /start har qanday yarim qolgan jarayonni to'xtatadi (ariza to'ldirish ham).
     # Aks holda /start ariza javobi sifatida saqlanib qolardi.
     if not txt.split(maxsplit=1)[1:] or not txt.split(maxsplit=1)[1].strip().startswith("job_"):
@@ -13542,6 +13544,8 @@ def _show_settings_cat(chat_id, cat, edit_message_id=None):
         mk.add(B("🔗 Bito xodim bog'lash", callback_data="set_bito_map"),
                B("🎁 Bonus foizi", callback_data="set_bito_rate"))
         mk.add(B("🎯 Turib qolgan bonus foizi", callback_data="set_stale_rate"))
+        mk.add(B("🔗 Hodim taklif havolalari",
+                 callback_data="set_emp_invites"))
     elif cat == "ai":
         aae_s = "O'chirish" if v["aae"] == "1" else "Yoqish"
         sae_s = "O'chirish" if v["sae"] == "1" else "Yoqish"
@@ -13605,6 +13609,64 @@ def _show_menu_mgmt(chat_id, scope, edit_message_id=None):
             pass  # edit muvaffaqiyatsiz bo'lsa (eski xabar), yangi yuboramiz
     bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=mk)
 
+# ════════ 🔗 HODIM TAKLIF HAVOLALARI (boshliq uchun) ════════
+# Hodim botga FAQAT shu havola orqali kira oladi. Havoladan keyin ham
+# boshliq tasdiqlashi shart: role='pending' bo'lib qoladi va boshliqqa
+# approve_* tugmalari boradi (qarang: handle_register).
+
+def _tenant_row_now():
+    """Joriy kontekstdagi biznes qatori (yoki None)."""
+    return CENTRAL.get_tenant_by_slug(TEN.current())
+
+
+def _invite_dead(inv):
+    """Muddati o'tgan yoki limiti tugagan havola — ro'yxatda ko'rsatilmaydi."""
+    if inv["expires_at"] and inv["expires_at"] < CENTRAL.today_str():
+        return True
+    if inv["max_uses"] and inv["used_count"] >= inv["max_uses"]:
+        return True
+    return False
+
+
+def _show_emp_invites(chat_id, edit_message_id=None):
+    t = _tenant_row_now()
+    if not t:
+        bot.send_message(chat_id, "⚠️ Biznes aniqlanmadi.")
+        return
+    B = types.InlineKeyboardButton
+    mk = types.InlineKeyboardMarkup(row_width=1)
+    live = [i for i in CENTRAL.invites_of(t["id"]) if not _invite_dead(i)]
+    lines = ["🔗 <b>Hodim taklif havolalari</b>", "",
+             "Havolani hodimga yuboring. U havola orqali kiradi va ism-familiyasini",
+             "yozadi — keyin <b>siz tasdiqlaguningizcha</b> botga kira olmaydi.", ""]
+    if not live:
+        lines.append("<i>Hozircha faol havola yo'q.</i>")
+    else:
+        for i in live:
+            lim = (f"{i['used_count']}/{i['max_uses']}" if i["max_uses"]
+                   else f"{i['used_count']}/∞")
+            exp = f" · {i['expires_at']} gacha" if i["expires_at"] else ""
+            lines.append(
+                f"<code>{h(CENTRAL.employee_link(t['slug'], i['token']))}</code>\n"
+                f"   <i>ishlatilgan {lim}{exp}</i>")
+            mk.add(B(f"🗑 O'chirish — {i['token']}",
+                     callback_data=f"set_inv_del_{i['token']}"))
+    mk.add(B("➕ Bitta xodim uchun (7 kun)", callback_data="set_inv_new_1"))
+    mk.add(B("➕ Ko'p martalik (30 kun)", callback_data="set_inv_new_m"))
+    mk.add(B("⬅️ Orqaga", callback_data="set_cat_emp"))
+    text = "\n".join(lines)
+    if edit_message_id:
+        try:
+            bot.edit_message_text(text, chat_id, edit_message_id,
+                                  parse_mode="HTML", reply_markup=mk,
+                                  disable_web_page_preview=True)
+            return
+        except Exception:
+            pass
+    bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=mk,
+                     disable_web_page_preview=True)
+
+
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
 def settings_cb(call):
     if get_role(call.from_user.id) != 'boss':
@@ -13618,6 +13680,31 @@ def settings_cb(call):
     if action.startswith("set_cat_"):
         _show_settings_cat(call.message.chat.id, action[8:],
                            edit_message_id=call.message.message_id)
+        return
+    # ── 🔗 Hodim taklif havolalari ──
+    if action == "set_emp_invites":
+        _show_emp_invites(call.message.chat.id,
+                          edit_message_id=call.message.message_id)
+        return
+    if action in ("set_inv_new_1", "set_inv_new_m"):
+        t = _tenant_row_now()
+        if t:
+            one = action.endswith("_1")
+            CENTRAL.create_invite(t["id"], "employee",
+                                  days=7 if one else 30,
+                                  max_uses=1 if one else 0,
+                                  created_by=call.from_user.id)
+        _show_emp_invites(call.message.chat.id,
+                          edit_message_id=call.message.message_id)
+        return
+    if action.startswith("set_inv_del_"):
+        tok = action[12:]
+        t = _tenant_row_now()
+        # Faqat O'Z biznesining havolasini o'chira oladi
+        if t and any(i["token"] == tok for i in CENTRAL.invites_of(t["id"])):
+            CENTRAL.revoke_invite(tok)
+        _show_emp_invites(call.message.chat.id,
+                          edit_message_id=call.message.message_id)
         return
     # ── 🎛 Menyu boshqaruvi ──
     if action == "set_new_prod_cat":

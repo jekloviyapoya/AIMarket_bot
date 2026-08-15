@@ -160,6 +160,8 @@ C.tenant_db_path(t["slug"])          # shu biznesning SQLite fayli
       havolasi bilan kiradi, Bito kaliti va do'kon joylashuvi so'raladi
 - [x] Modul gating: klaviatura filtri + markaziy tekshiruv (tugma, buyruq,
       inline callback prefiksi) + "faqat ko'rish" rejimi
+- [x] Kirish yopiq: havolasiz `/start` hech qachon ro'yxatdan o'tkazmaydi;
+      hodim havolasini boshliq ⚙️ Sozlamalar → 👥 Xodimlar bo'limida yaratadi
 - [x] Fon oqimlariga modul yorlig'i (14 ta) — rejalashtiruvchi uchun tayyor
 - [ ] Fon oqimlari uchun bitta rejalashtiruvchi
 - [ ] Telegram xabar navbati (throttling)
