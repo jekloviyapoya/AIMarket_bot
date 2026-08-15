@@ -4461,25 +4461,46 @@ def _build_kb(items, hidden, extra_rows=None):
             m.add(*row)
     return m
 
-def menu_groups():
-    """📁 Foydalanuvchi yaratgan menyu guruhlari (2026-08-09 so'rov):
-    {guruh_nomi: [tugma, ...]}. Guruhga kirgan tugmalar asosiy menyudan
-    olib tashlanib, guruh nomi tugma bo'lib chiqadi."""
+def scope_of_role(role):
+    return "emp" if role == "employee" else "adm"
+
+
+def menu_groups(scope="adm"):
+    """📁 Menyu guruhlari: {guruh_nomi: [tugma, ...]}.
+
+    Guruhlar ROL bo'yicha alohida saqlanadi (`menu_groups_adm` /
+    `menu_groups_emp`), chunki bir xil tugma boshliqda va xodimda boshqa
+    guruhda turishi mumkin (masalan 📅 Jadval boshliqda 👥 Jamoa ichida,
+    xodimda yuqori darajada).
+
+    Eski bazalarda bitta umumiy `menu_groups` kaliti bor — u zaxira
+    sifatida o'qiladi, ya'ni allaqachon sozlangan biznes buzilmaydi.
+    """
     import json as _json
+    ensure_menu_groups_seeded()
+    raw = get_setting(f"menu_groups_{scope}", "") or get_setting("menu_groups", "")
     try:
-        return _json.loads(get_setting("menu_groups", "") or "{}")
+        return _json.loads(raw or "{}")
     except Exception:
         return {}
 
-def save_menu_groups(d):
-    import json as _json
-    set_setting("menu_groups", _json.dumps(d, ensure_ascii=False))
 
-def _apply_groups(visible_items):
+def save_menu_groups(d, scope="adm"):
+    import json as _json
+    set_setting(f"menu_groups_{scope}", _json.dumps(d, ensure_ascii=False))
+
+
+def groups_for_user(tg_id):
+    return menu_groups(scope_of_role(get_role(tg_id)))
+
+def _apply_groups(visible_items, scope="adm"):
     """Ko'rinadigan tugmalarga guruhlarni qo'llaydi: a'zolari yashirilib,
-    o'rniga guruh nomi qo'shiladi (faqat kamida 1 ko'rinadigan a'zosi
-    bo'lgan guruhlar)."""
-    groups = menu_groups()
+    o'rniga guruh nomi qo'shiladi.
+
+    Guruh faqat kamida bitta KO'RINADIGAN a'zosi bo'lsa chiziladi — demak
+    moduli o'chirilgan guruh butunlay yo'qoladi (visible_items modul
+    bo'yicha allaqachon filtrlangan)."""
+    groups = menu_groups(scope)      # seeding shu yerda bo'ladi
     if not groups:
         return visible_items
     all_members = {b for lst in groups.values() for b in lst}
@@ -4491,17 +4512,17 @@ def _apply_groups(visible_items):
 
 def boss_kb():
     visible = visible_items("adm")
-    return _build_kb(_apply_groups(visible), set(),
+    return _build_kb(_apply_groups(visible, "adm"), set(),
                      extra_rows=[["⚙️ Sozlamalar"]])
 
 def mgr_kb():
     # Menejer menyusida boshliqdan farqli: Sozlamalar va Test natijalari yo'q
     visible = [x for x in visible_items("adm") if x != "🧠 Test natijalari"]
-    return _build_kb(_apply_groups(visible), set())
+    return _build_kb(_apply_groups(visible, "adm"), set())
 
 def emp_kb():
     visible = visible_items("emp")
-    return _build_kb(_apply_groups(visible), set())
+    return _build_kb(_apply_groups(visible, "emp"), set())
 
 # 🔗 Mahsulot bog'lash: xodimlarga STANDART yashirin — admin ⚙️ Sozlamalar →
 # Xodim menyusi'dan ochadi (bir martalik migratsiya, mavjud tanlovni buzmaydi)
@@ -4512,34 +4533,74 @@ if not get_setting("bogla_emp_migrated", ""):
 
 ALL_MENU_BTNS = set(ADM_MENU_ITEMS) | set(EMP_MENU_ITEMS)
 
-# 📁 Standart menyu tartibi (2026-08-09, foydalanuvchi so'rovi bilan
-# tayyorlab berildi) — BIR MARTA o'rnatiladi; keyin /menu orqali erkin
-# o'zgartiriladi, bu migratsiya qayta yozmaydi.
-if not get_setting("menu_groups_seeded", ""):
-    _default_groups = {
-        "👥 Xodimlar bo'limi": [
-            "👥 Xodimlar", "⏱ Davomat", "💰 Ish haqi", "🏆 Reyting",
-            "🧠 Test natijalari", "🧑‍💼 Ishga qabul", "✅ Tasdiqlash"],
-        "📋 Vazifalar": [
-            "📋 Vazifa berish", "📊 Vazifa hisoboti", "📋 Vazifa tarixi"],
-        "📦 Ombor va Zakaz": [
-            "📦 Ombor hisoboti", "🛒 Zakaz", "🛒 Zakaz tavsiyasi",
-            "📦 Inventarizatsiya", "🔗 Mahsulot bog'lash",
-            "⚖️ PLU kodlar", "🛒 Zarur mahsulotlar"],
-        "📊 Moliya": [
-            "💰 Pul taqvimi", "🎯 Zakaz limiti", "🎯 Maqsadlar", "🏢 Firmalar", "📥 Excel"],
+# 📁 STANDART IKKI DARAJALI MENYU
+# Yuqori daraja = modul. Mijoz sotib olgan modullarinigina ko'radi: guruhning
+# hamma tugmasi yopiq bo'lsa, guruhning o'zi ham chizilmaydi (_apply_groups).
+#
+# Boshliqda yuqori daraja: 7 guruh + doimiy ⚙️ Sozlamalar = 8 ta.
+# Xodimda kunlik amallar (kelish/ketish, jadval) YUQORIDA qoladi.
+DEFAULT_MENU_GROUPS = {
+    "adm": {
+        "👥 Jamoa": [
+            "👥 Xodimlar", "⏱ Davomat", "💰 Ish haqi", "📅 Jadval",
+            "✅ Tasdiqlash", "📋 Vazifa berish", "📊 Vazifa hisoboti",
+            "📋 Vazifa tarixi", "🏆 Reyting", "🧠 Test natijalari"],
+        "⭐ Mijozlar": [
+            "⭐ Mijoz baholari", "📢 Takliflar va Shikoyatlar",
+            "💬 Guruh chat"],
+        "💵 Savdo va moliya": [
+            "💵 Savdo", "💰 Pul taqvimi", "🏢 Firmalar",
+            "🎯 Zakaz limiti", "📥 Excel"],
+        "📦 Ombor": [
+            "📦 Ombor hisoboti", "📦 Inventarizatsiya",
+            "🛒 Zarur mahsulotlar", "⚖️ PLU kodlar"],
+        "📥 Ta'minot": [
+            "🛒 Zakaz", "🛒 Zakaz tavsiyasi", "🔗 Mahsulot bog'lash"],
+        "🤖 AI yordamchi": [
+            "🎯 Maqsadlar", "🧑‍💼 Ishga qabul"],
         "📣 Marketing": [
-            "📈 MARKETING", "📣 Post", "⭐ Mijoz baholari",
-            "📢 Takliflar va Shikoyatlar"],
+            "📣 Post", "📈 MARKETING"],
+    },
+    "emp": {
         "📊 Mening bo'limim": [
-            "📊 Mening hisobotim", "🏆 Mening ballarim",
-            "⭐ Mening baholarim", "📆 Haftalik", "🗓 Muddatli hisobot"],
-    }
-    if not menu_groups():
-        save_menu_groups(_default_groups)
-        print(f"MENU GROUPS: standart tartib o'rnatildi "
-              f"({len(_default_groups)} guruh)", flush=True)
+            "🕐 Holat (bugun)", "📊 Mening hisobotim",
+            "🏆 Mening ballarim", "⭐ Mening baholarim", "📆 Haftalik",
+            "🗓 Muddatli hisobot", "📋 Vazifa tarixi"],
+        "💬 Aloqa": [
+            "💬 Guruh chat", "📢 Taklif/Shikoyat"],
+    },
+}
+
+# Qaysi tenantda tekshirib bo'lingani (jarayon ichidagi kesh) — har
+# klaviatura qurilishida DB ga bormaslik uchun.
+_MENU_SEEDED = set()
+
+
+def ensure_menu_groups_seeded():
+    """Joriy biznesga standart guruhlarni BIR MARTA yozadi.
+
+    Ilgari bu blok modul darajasida, import paytida turardi — import esa
+    bir marta, DEFAULT_TENANT kontekstida bajariladi. Natijada keyin
+    ochilgan bizneslarda guruhlar umuman yo'q edi va 15-29 ta tugma tekis
+    chiqardi. Endi har tenant o'zi uchun birinchi murojaatda oladi.
+    """
+    slug = TEN.current()
+    if slug in _MENU_SEEDED:
+        return
+    _MENU_SEEDED.add(slug)
+    if get_setting("menu_groups_seeded", ""):
+        return
+    # Eski, bitta umumiy to'plamli baza (bonnu) — tegmaymiz.
+    if get_setting("menu_groups", ""):
+        set_setting("menu_groups_seeded", "1")
+        return
+    for scope, groups in DEFAULT_MENU_GROUPS.items():
+        if not get_setting(f"menu_groups_{scope}", ""):
+            save_menu_groups(groups, scope)
     set_setting("menu_groups_seeded", "1")
+    print(f"MENU GROUPS [{slug}]: standart ikki darajali menyu o'rnatildi "
+          f"({len(DEFAULT_MENU_GROUPS['adm'])} boshliq + "
+          f"{len(DEFAULT_MENU_GROUPS['emp'])} xodim guruhi)", flush=True)
 
 def is_menu_hidden_for(tg_id, btn_text):
     """Tugma bosilganda tekshirish: agar bu tugma foydalanuvchi roli uchun yashirilgan
@@ -4553,19 +4614,22 @@ def is_menu_hidden_for(tg_id, btn_text):
     if role == "employee":
         return btn_text in get_hidden_menu("emp")
     return False
-@bot.message_handler(func=lambda m: (m.text or "") in menu_groups())
+@bot.message_handler(func=lambda m: (m.text or "") in groups_for_user(m.from_user.id))
 def menu_group_open(message):
     """📁 Guruh tugmasi bosildi — ichidagi tugmalar bilan klaviatura."""
     uid = message.from_user.id
     role = get_role(uid)
     gname = message.text
-    members = menu_groups().get(gname) or []
+    members = menu_groups(scope_of_role(role)).get(gname) or []
     if role in ("boss", "manager"):
         allowed = set(visible_items("adm"))
         if role == "manager":
             allowed.discard("🧠 Test natijalari")
     elif role == "employee":
-        allowed = set(EMP_MENU_ITEMS) - get_hidden_menu("emp")
+        # visible_items() modul bo'yicha ham filtrlaydi — ilgari bu yerda
+        # faqat yashirilganlar olib tashlanardi va xodim guruh ichida
+        # sotib olinmagan modul tugmalarini ko'rardi.
+        allowed = set(visible_items("emp"))
     else:
         return
     items = [m_ for m_ in members if m_ in allowed]
@@ -4594,20 +4658,34 @@ def menu_manage_cmd(message):
     """📁 Menyu guruhlarini boshqarish (faqat asosiy boshliq)."""
     if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
-    groups = menu_groups()
     kb = types.InlineKeyboardMarkup(row_width=1)
-    for g in groups:
-        kb.add(types.InlineKeyboardButton(
-            f"📁 {g} ({len(groups[g])} ta) — 🗑 o'chirish",
-            callback_data=f"mgrp:del_{g[:40]}"))
-    kb.add(types.InlineKeyboardButton("➕ Yangi guruh yaratish",
-                                      callback_data="mgrp:new"))
+    kb.add(types.InlineKeyboardButton("👔 Boshliq/Menejer menyusi",
+                                      callback_data="mgrp:sc_adm"))
+    kb.add(types.InlineKeyboardButton("👷 Xodim menyusi",
+                                      callback_data="mgrp:sc_emp"))
     bot.send_message(message.chat.id,
                      "📁 <b>Menyu guruhlari</b>\n"
                      "Guruh — asosiy menyudagi bir nechta tugmani bitta "
                      "papkaga yig'ish. Guruhdagi tugmalar asosiy menyudan "
-                     "papka ichiga ko'chadi.",
+                     "papka ichiga ko'chadi.\n\n"
+                     "Boshliq va xodim guruhlari ALOHIDA — qaysi birini "
+                     "sozlaysiz?",
                      parse_mode="HTML", reply_markup=kb)
+
+
+def _show_menu_groups(chat_id, scope):
+    groups = menu_groups(scope)
+    nom = "Boshliq/Menejer" if scope == "adm" else "Xodim"
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for g in groups:
+        kb.add(types.InlineKeyboardButton(
+            f"📁 {g} ({len(groups[g])} ta) — 🗑 o'chirish",
+            callback_data=f"mgrp:del_{scope}_{g[:32]}"))
+    kb.add(types.InlineKeyboardButton("➕ Yangi guruh yaratish",
+                                      callback_data=f"mgrp:new_{scope}"))
+    bot.send_message(chat_id,
+                     f"📁 <b>{nom} menyusi guruhlari</b> "
+                     f"({len(groups)} ta)", parse_mode="HTML", reply_markup=kb)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("mgrp:"))
@@ -4617,20 +4695,23 @@ def menu_grp_cb(call):
     _ack(call)
     uid, chat_id = call.from_user.id, call.message.chat.id
     data = call.data.replace("mgrp:", "")
-    if data == "new":
-        W_MENU_GRP[uid] = {"step": "name"}
+    if data.startswith("sc_"):
+        _show_menu_groups(chat_id, data[3:])
+        return
+    if data.startswith("new_"):
+        W_MENU_GRP[uid] = {"step": "name", "scope": data[4:]}
         bot.send_message(chat_id, "📁 Yangi guruh nomini yozing (emoji bilan "
                                   "chiroyli chiqadi, masalan: 📊 Hisobotlar). "
                                   "Bekor: /bekor")
         return
     if data.startswith("del_"):
-        gname = data[4:]
-        groups = menu_groups()
+        scope, _, gname = data[4:].partition("_")
+        groups = menu_groups(scope)
         # qisqartirilgan nom bilan moslash
-        full = next((g for g in groups if g[:40] == gname), None)
+        full = next((g for g in groups if g[:32] == gname), None)
         if full:
             groups.pop(full, None)
-            save_menu_groups(groups)
+            save_menu_groups(groups, scope)
             bot.send_message(chat_id, f"🗑 «{full}» guruhi o'chirildi — "
                                       f"tugmalari asosiy menyuga qaytdi.",
                              reply_markup=get_kb(uid))
@@ -4639,16 +4720,17 @@ def menu_grp_cb(call):
         st = W_MENU_GRP.get(uid)
         if not st or st.get("step") != "pick":
             return
+        scope = st.get("scope", "adm")
         try:
             idx = int(data[4:])
-            btn = sorted(ALL_MENU_BTNS)[idx]
+            btn = _scope_btns(scope)[idx]
         except (ValueError, IndexError):
             return
         sel = st.setdefault("sel", set())
         (sel.discard if btn in sel else sel.add)(btn)
         try:
             bot.edit_message_reply_markup(chat_id, call.message.message_id,
-                                          reply_markup=_menu_pick_kb(sel))
+                                          reply_markup=_menu_pick_kb(sel, scope))
         except Exception:
             pass
         return
@@ -4657,18 +4739,24 @@ def menu_grp_cb(call):
         if not st or not st.get("sel"):
             bot.send_message(chat_id, "Hech narsa tanlanmadi — bekor qilindi.")
             return
-        groups = menu_groups()
+        scope = st.get("scope", "adm")
+        groups = menu_groups(scope)
         groups[st["name"]] = sorted(st["sel"])
-        save_menu_groups(groups)
+        save_menu_groups(groups, scope)
         bot.send_message(chat_id,
                          f"✅ «{st['name']}» guruhi yaratildi "
                          f"({len(st['sel'])} ta tugma). Asosiy menyu "
                          f"yangilandi:", reply_markup=get_kb(uid))
 
 
-def _menu_pick_kb(sel):
+def _scope_btns(scope):
+    """Shu rol menyusidagi tugmalar — barqaror tartibda (indeks callback'da)."""
+    return sorted(set(EMP_MENU_ITEMS if scope == "emp" else ADM_MENU_ITEMS))
+
+
+def _menu_pick_kb(sel, scope="adm"):
     kb = types.InlineKeyboardMarkup(row_width=1)
-    for i, btn in enumerate(sorted(ALL_MENU_BTNS)):
+    for i, btn in enumerate(_scope_btns(scope)):
         mark = "☑️ " if btn in sel else ""
         kb.add(types.InlineKeyboardButton(f"{mark}{btn}",
                                           callback_data=f"mgrp:tgl_{i}"))
@@ -4684,13 +4772,14 @@ def menu_grp_name_msg(message):
     name = (message.text or "").strip()[:32]
     if not name:
         return
-    if name in ALL_MENU_BTNS or name in menu_groups():
+    scope = (W_MENU_GRP.get(uid) or {}).get("scope", "adm")
+    if name in ALL_MENU_BTNS or name in menu_groups(scope):
         bot.send_message(message.chat.id, "Bu nom band — boshqa nom yozing.")
         return
-    W_MENU_GRP[uid] = {"step": "pick", "name": name, "sel": set()}
+    W_MENU_GRP[uid] = {"step": "pick", "name": name, "sel": set(), "scope": scope}
     bot.send_message(message.chat.id,
                      f"📁 «{name}» ichiga kiradigan tugmalarni belgilang:",
-                     reply_markup=_menu_pick_kb(set()))
+                     reply_markup=_menu_pick_kb(set(), scope))
 
 
 def get_kb(tg_id):

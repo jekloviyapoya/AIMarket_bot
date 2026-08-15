@@ -124,6 +124,9 @@ docs/HOLAT.md             shu fayl
 - [x] **Kirish yopiq** — havolasiz `/start` hech qachon ro'yxatdan o'tkazmaydi
 - [x] Boshliq hodim uchun taklif havolasini o'z akkauntida yaratadi
       (⚙️ Sozlamalar → 👥 Xodimlar va ballar → 🔗 Hodim taklif havolalari)
+- [x] **Ikki darajali menyu** — yuqori daraja = modul. Guruhlar rol
+      bo'yicha alohida (`menu_groups_adm` / `menu_groups_emp`) va yangi
+      biznesga avtomatik o'rnatiladi
 
 ### Yo'l-yo'lakay tuzatilgan kamchiliklar
 
@@ -137,6 +140,13 @@ docs/HOLAT.md             shu fayl
    kelgan HAR KIMNI avtomatik `employee` qilib bog'lardi va boshliqqa
    tasdiqlash so'rovi ketardi. Botni nomi bilan topgan begona odam
    shu yo'l bilan ichkariga so'rov yubora olardi — yopildi
+5. **Standart menyu guruhlari faqat `DEFAULT_TENANT` ga yozilardi** —
+   blok modul darajasida, import paytida turgani uchun. Keyin ochilgan
+   bizneslarda guruh umuman yo'q edi va 15-29 ta tugma tekis chiqardi.
+   Endi `ensure_menu_groups_seeded()` har tenant uchun dangasa ishlaydi
+6. **Xodim guruh ichida modul filtri yo'q edi** — `menu_group_open`
+   `EMP_MENU_ITEMS - hidden` ishlatardi, ya'ni sotib olinmagan modul
+   tugmalari guruh ichida ko'rinardi. `visible_items("emp")` ga o'tdi
 
 ---
 
@@ -171,7 +181,12 @@ docs/HOLAT.md             shu fayl
    tanasi bo'sh (o'lik kod). Haqiqiy ishni ikkinchisi qiladi — tahrirlaganda
    adashmang.
 
-8. **`/start` ga "havolasiz ham kirsin" fallback qo'shmang.** Bir marta
+8. **Menyu guruhlari ROL bo'yicha alohida.** `menu_groups(scope)` —
+   `menu_groups_adm` / `menu_groups_emp`. Eski `menu_groups` kaliti zaxira
+   sifatida o'qiladi (bonnu shu bilan ishlaydi) — uni o'chirmang, aks holda
+   allaqachon sozlangan bizneslar menyusi tekislanib ketadi.
+
+9. **`/start` ga "havolasiz ham kirsin" fallback qo'shmang.** Bir marta
    `len(tenants)==1` bo'lsa avtomatik bog'lash bor edi — natijada botni
    qidiruvdan topgan begona odam ro'yxatdan o'ta olardi. Kirish faqat
    taklif havolasi orqali: ega `?start=<slug>` (telefon bilan), hodim
