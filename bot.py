@@ -4354,6 +4354,94 @@ EMP_MENU_ITEMS = [
 ]
 MENU_NEVER_HIDE = {"⚙️ Sozlamalar"}
 
+# ══════════════════ 🧩 MODUL XARITASI ══════════════════════════════════
+# Qaysi tugma/buyruq qaysi sotiladigan modulga tegishli. Modul yoqilmagan
+# bo'lsa: tugma klaviaturada CHIZILMAYDI va bosilsa ham ishlamaydi
+# (saas/tenant.py → _wrap_handler ichidagi markaziy tekshiruv).
+MODULE_BUTTONS = {
+    # 👥 Jamoa
+    "👥 Xodimlar": "jamoa", "📋 Vazifa berish": "jamoa",
+    "📊 Vazifa hisoboti": "jamoa", "⏱ Davomat": "jamoa",
+    "💰 Ish haqi": "jamoa", "🏆 Reyting": "jamoa",
+    "📅 Jadval": "jamoa", "🧠 Test natijalari": "jamoa",
+    "📋 Vazifa tarixi": "jamoa",
+    "🟢 Kelish — Ishga keldim": "jamoa", "🔴 Ketish — Ishdan ketdim": "jamoa",
+    "🕐 Holat (bugun)": "jamoa", "📊 Mening hisobotim": "jamoa",
+    "🏆 Mening ballarim": "jamoa", "📆 Haftalik": "jamoa",
+    "🗓 Muddatli hisobot": "jamoa",
+    # ⭐ Mijozlar
+    "⭐ Mijoz baholari": "mijozlar", "📢 Takliflar va Shikoyatlar": "mijozlar",
+    "💬 Guruh chat": "mijozlar", "⭐ Mening baholarim": "mijozlar",
+    "📢 Taklif/Shikoyat": "mijozlar",
+    # 💵 Savdo va moliya
+    "💵 Savdo": "moliya", "🏢 Firmalar": "moliya",
+    "💰 Pul taqvimi": "moliya", "🎯 Zakaz limiti": "moliya",
+    # 📦 Ombor
+    "📦 Ombor hisoboti": "ombor", "📦 Inventarizatsiya": "ombor",
+    "🛒 Zarur mahsulotlar": "ombor", "⚖️ PLU kodlar": "ombor",
+    # 📥 Ta'minot
+    "🛒 Zakaz": "taminot", "🛒 Zakaz tavsiyasi": "taminot",
+    "🔗 Mahsulot bog'lash": "taminot",
+    # 🤖 AI yordamchi
+    "🎯 Maqsadlar": "ai", "🧑‍💼 Ishga qabul": "ai",
+    # 📣 Marketing
+    "📈 MARKETING": "marketing", "📣 Post": "marketing",
+    # ⚙️ Yadro: "📥 Excel", "✅ Tasdiqlash", "⚙️ Sozlamalar" — doim ochiq
+}
+
+MODULE_COMMANDS = {
+    "nakladnoy": "taminot", "bogla": "taminot", "nak_xotira": "taminot",
+    "firma_unut": "taminot", "test_purchase": "taminot",
+    "test_supplier": "taminot", "zakaz_tavsiya": "taminot",
+    "plu": "ombor", "plu_taklif": "ombor", "plu_test": "ombor",
+    "inventar": "ombor", "inv_test": "ombor", "inv_qidir": "ombor",
+    "sanash": "ombor", "sanash_hisobot": "ombor", "sanash_tozalash": "ombor",
+    "turib_qolganlar": "ombor", "zarur": "ombor",
+    "pul": "moliya", "firmalar": "moliya", "firma_xaridlari": "moliya",
+    "ai": "ai", "maqsad": "ai", "bugun": "ai",
+    "mijozlar_abc": "mijozlar", "abc_qoidalar": "mijozlar",
+    "marketing": "marketing", "post": "marketing", "rasm_test": "marketing",
+    "boshatilganlar": "jamoa",
+}
+
+# Inline tugma prefikslari (eski xabarlardagi tugmalar bosilsa ham yopiq)
+MODULE_CALLBACKS = {
+    "nak_": "taminot", "bogla_": "taminot", "zakaz_": "taminot",
+    "sup_": "taminot", "plu_": "ombor", "inv_": "ombor", "stock_": "ombor",
+    "zarur_": "ombor", "promo_": "marketing", "mkt_": "marketing",
+    "hr_": "ai", "goal_": "ai", "maqsad_": "ai", "abc_": "mijozlar",
+    "rv2_": "mijozlar", "rv2s_": "mijozlar",
+}
+
+# 🔴 "Faqat ko'rish" rejimi (litsenziya tugagan): shu tugmalar ishlaydi,
+# qolgani yopiladi. Hisobotlarni ko'rish mumkin, yangi yozuv qo'shilmaydi.
+READONLY_ALLOWED_BUTTONS = {
+    "📊 Vazifa hisoboti", "⏱ Davomat", "💰 Ish haqi", "💵 Savdo",
+    "🏆 Reyting", "📅 Jadval", "📥 Excel", "📋 Vazifa tarixi",
+    "📦 Ombor hisoboti", "🕐 Holat (bugun)", "📊 Mening hisobotim",
+    "🏆 Mening ballarim", "⭐ Mening baholarim", "📆 Haftalik",
+    "🗓 Muddatli hisobot", "⭐ Mijoz baholari",
+    "📢 Takliflar va Shikoyatlar", "⚙️ Sozlamalar",
+}
+READONLY_ALLOWED_COMMANDS = {"start", "menu", "litsenziya", "sozlama"}
+
+
+def module_of_button(btn):
+    return MODULE_BUTTONS.get(btn)
+
+
+def _module_ok(btn):
+    m = MODULE_BUTTONS.get(btn)
+    return (not m) or CFG.has(m)
+
+
+def visible_items(scope):
+    """Rol uchun ko'rinadigan tugmalar: yashirilmagan VA moduli yoqilgan."""
+    items = ADM_MENU_ITEMS if scope == "adm" else EMP_MENU_ITEMS
+    hidden = get_hidden_menu(scope)
+    return [x for x in items if x not in hidden and _module_ok(x)]
+
+
 def get_hidden_menu(scope):
     """scope: 'adm' yoki 'emp'. Yashirilgan tugmalar to'plamini qaytaradi."""
     raw = get_setting(f"hidden_menu_{scope}", "")
@@ -4402,21 +4490,17 @@ def _apply_groups(visible_items):
     return out
 
 def boss_kb():
-    hidden = get_hidden_menu("adm")
-    visible = [x for x in ADM_MENU_ITEMS if x not in hidden]
+    visible = visible_items("adm")
     return _build_kb(_apply_groups(visible), set(),
                      extra_rows=[["⚙️ Sozlamalar"]])
 
 def mgr_kb():
-    hidden = get_hidden_menu("adm")
     # Menejer menyusida boshliqdan farqli: Sozlamalar va Test natijalari yo'q
-    items = [x for x in ADM_MENU_ITEMS if x != "🧠 Test natijalari"]
-    visible = [x for x in items if x not in hidden]
+    visible = [x for x in visible_items("adm") if x != "🧠 Test natijalari"]
     return _build_kb(_apply_groups(visible), set())
 
 def emp_kb():
-    hidden = get_hidden_menu("emp")
-    visible = [x for x in EMP_MENU_ITEMS if x not in hidden]
+    visible = visible_items("emp")
     return _build_kb(_apply_groups(visible), set())
 
 # 🔗 Mahsulot bog'lash: xodimlarga STANDART yashirin — admin ⚙️ Sozlamalar →
@@ -4477,7 +4561,7 @@ def menu_group_open(message):
     gname = message.text
     members = menu_groups().get(gname) or []
     if role in ("boss", "manager"):
-        allowed = set(ADM_MENU_ITEMS) - get_hidden_menu("adm")
+        allowed = set(visible_items("adm"))
         if role == "manager":
             allowed.discard("🧠 Test natijalari")
     elif role == "employee":
@@ -4876,15 +4960,15 @@ def dashboard_cache_warmer_thread():
         loop_count += 1
         time.sleep(120)
 
-_boot_thread(reminder_thread)
-_boot_thread(tips_thread)
+_boot_thread(reminder_thread, module="jamoa")
+_boot_thread(tips_thread, module="jamoa")
 # daily_sale_thread o'chirildi — savdo endi Bito'dan avtomatik olinadi
-_boot_thread(bito_sale_thread)
-_boot_thread(bito_employee_bonus_thread)
-_boot_thread(stock_alert_thread)
-_boot_thread(ai_advice_thread)
+_boot_thread(bito_sale_thread, module="moliya")
+_boot_thread(bito_employee_bonus_thread, module="moliya")
+_boot_thread(stock_alert_thread, module="ombor")
+_boot_thread(ai_advice_thread, module="ai")
 _boot_thread(license_check_thread)
-_boot_thread(abc_auto_task_thread)
+_boot_thread(abc_auto_task_thread, module="mijozlar")
 _boot_thread(dashboard_cache_warmer_thread)
 # 📣 promo_daily_thread pastroqda aniqlanadi — start ham o'sha yerda emas,
 # bu yerda emas (NameError bo'lardi); qidiring: PROMO_THREAD_START
@@ -8655,7 +8739,7 @@ def nak_catalog_warmer_thread():
 # ⚠️ Funksiya shu yerda (fayl oxiriga yaqin) aniqlangani uchun, uni ishga tushirish
 # chaqiruvi ham SHU YERDA turishi kerak — aks holda "NameError: not defined" bo'ladi
 # (fayl yuqorisidagi umumiy thread-boshlash bloki bu funksiya aniqlanishidan OLDIN ishlaydi).
-_boot_thread(nak_catalog_warmer_thread)
+_boot_thread(nak_catalog_warmer_thread, module="taminot")
 
 def _nak_norm(name):
     """Solishtirish uchun nomni soddalashtiradi (katta-kichik harf, ortiqcha bo'shliq)."""
@@ -10924,11 +11008,282 @@ def menu_cmd(message):
     u = get_user(tg_id); name = u[1] if u else ""
     bot.send_message(tg_id, f"👋 *{name}* — Asosiy menyu:", parse_mode="Markdown", reply_markup=get_kb(tg_id))
 
+
+# ══════════ 🏢 HAVOLA ORQALI RO'YXATDAN O'TISH (ko'p-ijarachi) ══════════
+# t.me/AIMARKETNM_BOT?start=<slug>              — biznes egasi
+# t.me/AIMARKETNM_BOT?start=e-<slug>-<token>    — hodim (taklif havolasi)
+# t.me/AIMARKETNM_BOT?start=r-<slug>            — mijoz (QR baholash)
+# t.me/AIMARKETNM_BOT?start=j-<slug>-<id>       — vakansiyaga nomzod
+#
+# W_ONBOARD ataylab ODDIY lug'at: bu holat foydalanuvchi biror biznesga
+# BOG'LANMASDAN OLDIN yashaydi, ya'ni tenant konteksti hali aniq emas.
+W_ONBOARD = {}
+
+
+def _phone_kb():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    kb.add(types.KeyboardButton("📱 Raqamni yuborish", request_contact=True))
+    return kb
+
+
+def _sync_bito_to_central(tid):
+    """bito_autodetect_config() settings'ga yozgan ID'larni markaziy bazaga."""
+    pairs = {"bito_org_id": "org_id", "bito_warehouse_id": "warehouse_id",
+             "bito_currency_id": "currency_id", "bito_sale_price_id": "sale_price_id",
+             "bito_plu_field_id": "plu_field_id", "bito_kg_measure_id": "kg_measure_id",
+             "bito_default_uom_id": "default_uom_id"}
+    cfg = {}
+    for skey, col in pairs.items():
+        v = get_setting(skey, "")
+        if v:
+            cfg[col] = v
+    if cfg:
+        CENTRAL.set_bito_config(tid, **cfg)
+    return len(cfg)
+
+
+def _finish_owner_login(tg_id, t):
+    """Telefon tasdiqlangandan keyin: egani bog'lash va menyuni ochish."""
+    CENTRAL.update_tenant(t["id"], owner_tg_id=tg_id)
+    CENTRAL.bind_user(tg_id, t["id"], "boss")
+    CENTRAL.log(tg_id, t["id"], "owner_linked", str(tg_id))
+    name = t["owner_name"] or "Boshliq"
+    with tenant_ctx(t["slug"]):
+        q("INSERT OR REPLACE INTO users (tg_id,full_name,role,approved_by,created_at) "
+          "VALUES (?,?,'boss',?,?)", (tg_id, name, tg_id, now_str()))
+        kb = boss_kb()
+    bot.send_message(tg_id,
+                     f"✅ <b>{h(t['name'])}</b> — xush kelibsiz, {h(name)}!\n"
+                     f"Siz <b>boshliq</b> sifatida kirdingiz.",
+                     parse_mode="HTML", reply_markup=kb)
+    if not CENTRAL.bito_ready(t["id"]):
+        W_ONBOARD[tg_id] = {"step": "bito", "slug": t["slug"]}
+        bot.send_message(tg_id,
+                         "🔌 <b>Bito integratsiyasi</b>\n\n"
+                         "Bito API kalitingizni yuboring — savdo, ombor va "
+                         "nakladnoy bo'limlari shu orqali ishlaydi.\n\n"
+                         "Hozir kerak bo'lmasa: /keyinroq", parse_mode="HTML")
+    else:
+        _ask_shop_location(tg_id, t["slug"])
+
+
+def _ask_shop_location(tg_id, slug):
+    t = CENTRAL.get_tenant_by_slug(slug)
+    if t and t["shop_lat"]:
+        return
+    W_ONBOARD[tg_id] = {"step": "geo", "slug": slug}
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    kb.add(types.KeyboardButton("📍 Do'kon joylashuvi", request_location=True))
+    kb.add("⏭ Keyinroq")
+    bot.send_message(tg_id,
+                     "📍 Oxirgi qadam — <b>do'kon joylashuvini</b> yuboring.\n"
+                     "<i>Xodimlarning kelish/ketish qaydi shu nuqtaga qarab "
+                     "tekshiriladi.</i>", parse_mode="HTML", reply_markup=kb)
+
+
+def onboarding_start(message, payload):
+    """Havola bilan kelgan /start. True — to'liq qayta ishlandi."""
+    tg_id = message.from_user.id
+    kind, slug, extra = CENTRAL.parse_start_payload(payload)
+    if not kind or not slug:
+        return False
+    t = CENTRAL.get_tenant_by_slug(slug)
+    if not t:
+        bot.send_message(tg_id, "⚠️ Havola noto'g'ri yoki biznes o'chirilgan.")
+        return True
+
+    if kind == "owner":
+        bound = CENTRAL.tenant_of_user(tg_id)
+        if bound and bound["id"] == t["id"]:
+            return False           # allaqachon ichkarida — eski oqim ishlasin
+        if t["owner_tg_id"] and t["owner_tg_id"] != tg_id:
+            bot.send_message(tg_id,
+                             "⚠️ Bu biznes boshqa Telegram hisobiga bog'langan.\n"
+                             "Hodim sifatida kirmoqchi bo'lsangiz — boshlig'ingizdan "
+                             "taklif havolasini so'rang.")
+            return True
+        W_ONBOARD[tg_id] = {"step": "phone", "slug": slug}
+        bot.send_message(tg_id,
+                         f"👋 <b>{h(t['name'])}</b> botiga xush kelibsiz!\n\n"
+                         f"Tasdiqlash uchun telefon raqamingizni yuboring — "
+                         f"parol kerak emas.",
+                         parse_mode="HTML", reply_markup=_phone_kb())
+        return True
+
+    if kind == "employee":
+        inv_t, role_or_err = CENTRAL.use_invite(extra or "")
+        if not inv_t:
+            bot.send_message(tg_id, f"⚠️ {role_or_err}")
+            return True
+        CENTRAL.bind_user(tg_id, inv_t["id"], "employee")
+        with tenant_ctx(inv_t["slug"]):
+            if get_user(tg_id):
+                bot.send_message(tg_id, "👋 Siz allaqachon ro'yxatdasiz.",
+                                 reply_markup=get_kb(tg_id))
+                return True
+        W_REGISTER[tg_id] = 'user'
+        bot.send_message(tg_id,
+                         f"👋 <b>{h(inv_t['name'])}</b> jamoasiga xush kelibsiz!\n\n"
+                         f"Ism va familiyangizni yozing:", parse_mode="HTML")
+        return True
+
+    if kind == "review":
+        CENTRAL.bind_user(tg_id, t["id"], "customer")
+        with tenant_ctx(t["slug"]):
+            _start_review(message)
+        return True
+
+    if kind == "job":
+        CENTRAL.bind_user(tg_id, t["id"], "candidate")
+        try:
+            with tenant_ctx(t["slug"]):
+                start_job_application(message, int(extra))
+        except (TypeError, ValueError):
+            bot.send_message(tg_id, "⚠️ Vakansiya topilmadi.")
+        return True
+
+    return False
+
+
+@bot.message_handler(content_types=['contact'],
+                     func=lambda m: m.from_user.id in W_ONBOARD)
+def onboard_contact(message):
+    tg_id = message.from_user.id
+    st = W_ONBOARD.get(tg_id) or {}
+    if st.get("step") != "phone":
+        return
+    c = message.contact
+    if not c or c.user_id != tg_id:
+        bot.send_message(tg_id, "⚠️ Faqat O'ZINGIZNING raqamingizni yuboring.")
+        return
+    t = CENTRAL.get_tenant_by_slug(st["slug"])
+    if not t:
+        W_ONBOARD.pop(tg_id, None)
+        return
+    if CENTRAL.norm_phone(c.phone_number) != CENTRAL.norm_phone(t["owner_phone"]):
+        W_ONBOARD.pop(tg_id, None)
+        bot.send_message(tg_id,
+                         "❌ Bu raqam ro'yxatda yo'q.\n\n"
+                         "Bot egasi kiritgan raqam bilan urinib ko'ring yoki "
+                         "u bilan bog'laning.",
+                         reply_markup=types.ReplyKeyboardRemove())
+        try:
+            if CENTRAL.MAIN_BOT_USERNAME and int(os.getenv("SAAS_OWNER_ID", "0") or 0):
+                bot.send_message(int(os.getenv("SAAS_OWNER_ID")),
+                                 f"⚠️ <b>{h(t['name'])}</b> havolasiga noto'g'ri raqam "
+                                 f"bilan kirishga urinildi: <code>{h(c.phone_number)}</code> "
+                                 f"(tg_id {tg_id})", parse_mode="HTML")
+        except Exception:
+            pass
+        return
+    W_ONBOARD.pop(tg_id, None)
+    _finish_owner_login(tg_id, t)
+
+
+@bot.message_handler(commands=['keyinroq'])
+def onboard_skip_bito(message):
+    tg_id = message.from_user.id
+    st = W_ONBOARD.get(tg_id) or {}
+    if st.get("step") != "bito":
+        return
+    slug = st["slug"]
+    W_ONBOARD.pop(tg_id, None)
+    bot.send_message(tg_id,
+                     "✅ Yaxshi. Bito kalitini keyinroq ⚙️ Sozlamalar orqali "
+                     "kiritishingiz mumkin.")
+    _ask_shop_location(tg_id, slug)
+
+
+@bot.message_handler(func=lambda m: (m.from_user.id in W_ONBOARD
+                                     and W_ONBOARD[m.from_user.id].get("step") == "bito"
+                                     and (m.text or "").strip()
+                                     and not (m.text or "").startswith("/")))
+def onboard_bito_key(message):
+    tg_id = message.from_user.id
+    slug = W_ONBOARD[tg_id]["slug"]
+    key = (message.text or "").strip()
+    t = CENTRAL.get_tenant_by_slug(slug)
+    if not t:
+        W_ONBOARD.pop(tg_id, None)
+        return
+    CENTRAL.set_bito_key(t["id"], key)
+    bot.send_message(tg_id, "⏳ Kalit tekshirilmoqda va sozlamalar aniqlanmoqda...")
+
+    def run():
+        with tenant_ctx(slug):
+            try:
+                bito_autodetect_config()
+                n = _sync_bito_to_central(t["id"])
+            except Exception as e:
+                print("ONBOARD BITO ERR:", str(e)[:150], flush=True)
+                n = 0
+        if n:
+            W_ONBOARD.pop(tg_id, None)
+            bot.send_message(tg_id,
+                             f"✅ Bito ulandi — {n} ta sozlama avtomatik aniqlandi.",
+                             parse_mode="HTML")
+            _ask_shop_location(tg_id, slug)
+        else:
+            bot.send_message(tg_id,
+                             "❌ Kalit ishlamadi yoki ruxsat yetarli emas.\n"
+                             "Qaytadan yuboring yoki /keyinroq deb yozing.")
+    threading.Thread(target=run, daemon=True).start()
+
+
+@bot.message_handler(content_types=['location'],
+                     func=lambda m: m.from_user.id in W_ONBOARD
+                     and W_ONBOARD[m.from_user.id].get("step") == "geo")
+def onboard_location(message):
+    tg_id = message.from_user.id
+    slug = W_ONBOARD.pop(tg_id)["slug"]
+    t = CENTRAL.get_tenant_by_slug(slug)
+    if t:
+        CENTRAL.update_tenant(t["id"], shop_lat=message.location.latitude,
+                              shop_lon=message.location.longitude)
+    with tenant_ctx(slug):
+        kb = get_kb(tg_id)
+    bot.send_message(tg_id, "✅ Joylashuv saqlandi. Sozlash tugadi!",
+                     reply_markup=kb)
+
+
+@bot.message_handler(func=lambda m: (m.text == "⏭ Keyinroq"
+                                     and m.from_user.id in W_ONBOARD))
+def onboard_skip_geo(message):
+    tg_id = message.from_user.id
+    slug = W_ONBOARD.pop(tg_id, {}).get("slug")
+    with tenant_ctx(slug or TEN.current()):
+        kb = get_kb(tg_id)
+    bot.send_message(tg_id,
+                     "✅ Sozlash tugadi. Do'kon joylashuvini keyinroq "
+                     "⚙️ Sozlamalar orqali kiritishingiz mumkin.",
+                     reply_markup=kb)
+
+
 @bot.message_handler(commands=['start'])
 def start(message):
     tg_id = message.from_user.id
     W_REGISTER.pop(tg_id, None)
+    W_ONBOARD.pop(tg_id, None)
     txt = message.text or ""
+    _parts = txt.split(maxsplit=1)
+    _payload = _parts[1].strip() if len(_parts) > 1 else ""
+
+    # 🏢 Havola bilan kelgan bo'lsa — ko'p-ijarachi ro'yxatdan o'tish
+    if _payload and onboarding_start(message, _payload):
+        return
+    # Havolasiz va hech qaysi biznesga bog'lanmagan
+    if not _payload and CENTRAL.tenant_of_user(tg_id) is None:
+        _all = CENTRAL.list_tenants()
+        if len(_all) == 1:
+            # Yagona biznes — eski xatti-harakat saqlanadi
+            CENTRAL.bind_user(tg_id, _all[0]["id"], "employee")
+        else:
+            bot.send_message(tg_id,
+                             "👋 Salom! Botga kirish uchun sizga berilgan "
+                             "<b>havola</b> orqali o'ting.\n\n"
+                             "Botni o'z biznesingizga olmoqchi bo'lsangiz — "
+                             "bot egasiga murojaat qiling.", parse_mode="HTML")
+            return
     # /start har qanday yarim qolgan jarayonni to'xtatadi (ariza to'ldirish ham).
     # Aks holda /start ariza javobi sifatida saqlanib qolardi.
     if not txt.split(maxsplit=1)[1:] or not txt.split(maxsplit=1)[1].strip().startswith("job_"):
@@ -13789,7 +14144,7 @@ def marketing_thread():
             print("MARKETING THREAD ERR:", str(e)[:150], flush=True)
         time.sleep(30)
 
-_boot_thread(marketing_thread)
+_boot_thread(marketing_thread, module="marketing")
 
 # ══════════════════════════════════════════════════════════════════
 # 📱 MOBIL ILOVA UCHUN REST API (Telegram'siz ishlaydi)
@@ -17598,11 +17953,11 @@ def photo_fallthrough_diag(message):
 
 
 # PROMO_THREAD_START — funksiya endi aniqlangan, ishga tushiramiz
-_boot_thread(promo_daily_thread)
-_boot_thread(zakaz_limit_thread)
-_boot_thread(task_overdue_thread)
-_boot_thread(promo_sched_thread)
-_boot_thread(zarur_watch_thread)
+_boot_thread(promo_daily_thread, module="marketing")
+_boot_thread(zakaz_limit_thread, module="moliya")
+_boot_thread(task_overdue_thread, module="jamoa")
+_boot_thread(promo_sched_thread, module="marketing")
+_boot_thread(zarur_watch_thread, module="ombor")
 
 
 api = Flask(__name__)
@@ -21535,6 +21890,11 @@ def main():
     TEN.stop_recording()                 # sxema yig'ib bo'lindi
     TEN.set_deny_sender(                 # yopiq modul haqida xabar
         lambda cid, txt: bot.send_message(cid, txt, parse_mode="HTML"))
+    TEN.set_gates(buttons=MODULE_BUTTONS,        # modul gating
+                  commands=MODULE_COMMANDS,
+                  callbacks=MODULE_CALLBACKS)
+    TEN.set_readonly_policy(READONLY_ALLOWED_BUTTONS,
+                            READONLY_ALLOWED_COMMANDS)
     TEN.attach_tenant_routing(bot)       # har update o'z biznesiga
     _start_boot_threads()
 

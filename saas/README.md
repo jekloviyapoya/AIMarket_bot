@@ -115,7 +115,21 @@ Nomzod:  t.me/AIMARKETNM_BOT?start=j-apelsinmarket-14
 
 ---
 
-## 6. `bot.py` uchun API (keyingi bosqich)
+## 6. Modul gating qanday ishlaydi
+
+`bot.py` da uchta xarita bor (`MODULE_BUTTONS`, `MODULE_COMMANDS`,
+`MODULE_CALLBACKS`) — qaysi tugma/buyruq/inline tugma qaysi modulga tegishli.
+`main()` ularni `TEN.set_gates(...)` orqali beradi. Keyin:
+
+1. **Klaviatura** — `visible_items()` yoqilmagan modul tugmalarini chizmaydi.
+2. **Markaziy tekshiruv** — `_wrap_handler` har bir update uchun modулni
+   aniqlaydi; yopiq bo'lsa handler umuman bajarilmaydi va foydalanuvchiga
+   "tarifingizga kirmagan" xabari boradi. Eski xabardagi tugmani bosish ham
+   shu yerda to'siladi.
+3. **Faqat ko'rish** — litsenziya tugaganda `READONLY_ALLOWED_BUTTONS` /
+   `READONLY_ALLOWED_COMMANDS` dagilar ishlaydi, qolgani to'siladi.
+
+## 7. `bot.py` uchun API
 
 Asosiy botga integratsiya qilinganda ishlatiladigan funksiyalar:
 
@@ -132,7 +146,7 @@ C.tenant_db_path(t["slug"])          # shu biznesning SQLite fayli
 
 ---
 
-## 7. Holat
+## 8. Holat
 
 - [x] Markaziy registr (`central.py`) — sinovdan o'tgan
 - [x] Litsenziya boti (`admin_bot.py`) — barcha oqimlar sinovdan o'tgan
@@ -140,7 +154,10 @@ C.tenant_db_path(t["slug"])          # shu biznesning SQLite fayli
 - [x] `bot.py` tenant yadrosi (`tenant.py`: DB yo'naltirish, `TDict`/`TSet`, `CFG`)
 - [x] Har update o'z biznesining kontekstida (`attach_tenant_routing`)
 - [x] Yangi tenantga sxema avtomatik ko'chadi (67 ta DDL yozib olinadi)
-- [ ] Deep-link ro'yxatdan o'tish `bot.py` ichida (telefon bilan tasdiqlash)
-- [ ] Modul gating (menyu filtri + `@needs` dekoratorini handlerlarga qo'yish)
+- [x] Deep-link ro'yxatdan o'tish: ega telefon bilan tasdiqlaydi, hodim taklif
+      havolasi bilan kiradi, Bito kaliti va do'kon joylashuvi so'raladi
+- [x] Modul gating: klaviatura filtri + markaziy tekshiruv (tugma, buyruq,
+      inline callback prefiksi) + "faqat ko'rish" rejimi
+- [x] Fon oqimlariga modul yorlig'i (14 ta) — rejalashtiruvchi uchun tayyor
 - [ ] Fon oqimlari uchun bitta rejalashtiruvchi
 - [ ] Telegram xabar navbati (throttling)

@@ -561,12 +561,116 @@ def tenant_for_update(obj):
     return None
 
 
+# ─────────────── Modul gating va "faqat ko'rish" siyosati ───────────────
+
+_GATE = {"buttons": {}, "commands": {}, "callbacks": {}}
+_RO = {"buttons": set(), "commands": set()}
+
+
+def set_gates(buttons=None, commands=None, callbacks=None):
+    """bot.py o'z xaritalarini shu yerga beradi: matn/buyruq/callback → modul."""
+    if buttons:
+        _GATE["buttons"] = dict(buttons)
+    if commands:
+        _GATE["commands"] = dict(commands)
+    if callbacks:
+        _GATE["callbacks"] = dict(callbacks)
+
+
+def set_readonly_policy(allowed_buttons=None, allowed_commands=None):
+    """Litsenziya tugaganda ISHLASHDA DAVOM ETADIGAN tugma/buyruqlar."""
+    _RO["buttons"] = set(allowed_buttons or ())
+    _RO["commands"] = set(allowed_commands or ())
+
+
+def _cmd_of(text):
+    if not text or not text.startswith("/"):
+        return None
+    return text[1:].split()[0].split("@")[0].lower()
+
+
+def gate_module(obj):
+    """Shu update qaysi modulga tegishli? (yo'q bo'lsa None = yadro)"""
+    data = getattr(obj, "data", None)
+    if data:
+        for pref, mod in _GATE["callbacks"].items():
+            if data.startswith(pref):
+                return mod
+        return None
+    txt = getattr(obj, "text", None) or ""
+    cmd = _cmd_of(txt)
+    if cmd:
+        return _GATE["commands"].get(cmd)
+    return _GATE["buttons"].get(txt)
+
+
+def _readonly_blocks(obj):
+    """Faqat ko'rish rejimida bu update to'silishi kerakmi?"""
+    txt = getattr(obj, "text", None) or ""
+    cmd = _cmd_of(txt)
+    if cmd:
+        return cmd not in _RO["commands"]
+    if txt:
+        return txt not in _RO["buttons"]
+    return True          # callback, rasm, lokatsiya, ovoz — hammasi yozuv
+
+
+def _chat_id_of(obj):
+    try:
+        return (obj.message.chat.id if hasattr(obj, "message") and obj.message
+                else obj.chat.id)
+    except Exception:
+        return None
+
+
+def _tell(obj, text):
+    cid = _chat_id_of(obj)
+    if cid is None or not _DENY_SENDER:
+        return
+    try:
+        _DENY_SENDER(cid, text)
+    except Exception:
+        pass
+
+
+def _gate_check(obj):
+    """True qaytarsa — handler bajarilmaydi."""
+    t = current_tenant_row()
+    if not t:
+        return False
+
+    # 1) Litsenziya: faqat ko'rish rejimi
+    state, _left, ends = C.license_state(t["id"])
+    if state in ("locked", "suspended") and _readonly_blocks(obj):
+        if state == "suspended":
+            _tell(obj, "⛔️ Bot vaqtincha to'xtatilgan. Bot egasi bilan "
+                       "bog'laning.")
+        else:
+            _tell(obj, f"🔒 <b>Obuna muddati tugagan</b> ({ends}).\n\n"
+                       f"Hozir faqat hisobotlarni <b>ko'rish</b> mumkin. "
+                       f"Yangi yozuv qo'shish, AI va Bito amallari to'xtatilgan.\n\n"
+                       f"Davom ettirish uchun to'lovni amalga oshiring.")
+        return True
+
+    # 2) Modul yoqilganmi
+    mod = gate_module(obj)
+    if mod and not C.has_module(t["id"], mod):
+        m = C.module_info(mod)
+        _tell(obj, f"🔒 <b>{m['name'] if m else mod}</b> bo'limi sizning "
+                   f"tarifingizga kirmagan.\n\nQo'shish uchun bot egasiga "
+                   f"murojaat qiling.")
+        return True
+    return False
+
+
 def _wrap_handler(fn):
     if getattr(fn, "_tenant_wrapped", False):
         return fn
 
     def w(arg, *a, **kw):
         with tenant_ctx(tenant_for_update(arg) or DEFAULT_TENANT):
+            if _gate_check(arg):
+                return None
             return fn(arg, *a, **kw)
 
     w._tenant_wrapped = True
@@ -584,15 +688,36 @@ def attach_tenant_routing(bot):
       2. handler funksiyasining o'zi — u ishchi oqimda (thread pool) ishlaydi,
          u yerga contextvar avtomatik ko'chmaydi.
     """
-    orig_notify = bot._notify_command_handlers
+    # pyTelegramBotAPI 4.x da filtrlar (func=lambda m: ...) handler bilan
+    # BIR JOYDA — _run_middlewares_and_handler ichida, ishchi oqimda
+    # baholanadi. Shuning uchun kontekstni aynan shu yerda o'rnatamiz;
+    # aks holda filtr lambdalari noto'g'ri biznesning bazasini o'qir edi.
+    hooked = False
+    if hasattr(bot, "_run_middlewares_and_handler"):
+        orig_run = bot._run_middlewares_and_handler
 
-    def notify(handlers, new_messages, update_type):
-        for msg in new_messages:
-            slug = tenant_for_update(msg) or DEFAULT_TENANT
-            with tenant_ctx(slug):
-                orig_notify(handlers, [msg], update_type)
+        def run(message, *a, **kw):
+            with tenant_ctx(tenant_for_update(message) or DEFAULT_TENANT):
+                return orig_run(message, *a, **kw)
 
-    bot._notify_command_handlers = notify
+        bot._run_middlewares_and_handler = run
+        hooked = True
+
+    # Eskiroq versiyalar uchun zaxira yo'l
+    if not hooked and hasattr(bot, "_notify_command_handlers"):
+        orig_notify = bot._notify_command_handlers
+
+        def notify(handlers, new_messages, update_type):
+            for msg in new_messages:
+                with tenant_ctx(tenant_for_update(msg) or DEFAULT_TENANT):
+                    orig_notify(handlers, [msg], update_type)
+
+        bot._notify_command_handlers = notify
+        hooked = True
+
+    if not hooked:
+        print("⚠️  TENANT: dispatch nuqtasi topilmadi — filtrlar standart "
+              "tenantda baholanadi!", flush=True)
 
     n = 0
     for attr in ("message_handlers", "edited_message_handlers",
