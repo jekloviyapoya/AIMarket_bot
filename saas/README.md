@@ -20,6 +20,8 @@ fayli buni Railway (Railpack/Nixpacks) uchun qadab qo'yadi. Xohlasangiz
 | `migrate_bonnu.py` | Mavjud `market.db` ni birinchi tenantga aylantirish |
 | `tenant.py` | `bot.py` uchun tenant yadrosi: DB yo'naltirish, `TDict`/`TSet`, `CFG`, `@needs` |
 
+📋 **Ishni davom ettirmoqchimisiz?** Avval [`docs/HOLAT.md`](../docs/HOLAT.md) ni o'qing — u yerda arxitektura qarorlari, tegmaslik kerak bo'lgan joylar va qolgan ishlar ro'yxati bor.
+
 ---
 
 ## 1. Muhit o'zgaruvchilari
