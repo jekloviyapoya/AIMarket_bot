@@ -10,6 +10,15 @@ from math import radians, sin, cos, sqrt, atan2
 import os, io, threading, time
 import requests
 
+# ── 🏢 Multi-tenant qatlam ──────────────────────────────────────
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "saas"))
+import central as CENTRAL          # noqa: E402
+import tenant as TEN               # noqa: E402
+from tenant import (CFG, TDict, TSet, tenant_ctx, needs,  # noqa: E402
+                    for_each_tenant, active_slugs)
+CENTRAL.init_central()
+
 # ===== 🔒 MAXFIY KALITLAR — FAQAT ENVIRONMENT VARIABLE ORQALI =====
 # Bu qiymatlar HECH QACHON kodga yozilmasligi kerak — faqat Railway'ning
 # "Variables" bo'limida saqlanadi. Agar biror kalit yo'q bo'lsa, bot ishga
@@ -48,6 +57,16 @@ def _photo_sentinel_handler(message):
 
 _LAST_UPDATE_ID = {"v": None}
 
+# Modul darajasidagi thread'lar darhol emas, fayl to'liq yuklangach
+# ishga tushadi (o'shanda tenant sxemasi va registri tayyor bo'ladi).
+_BOOT_THREADS = []
+
+
+def _boot_thread(fn, name=None, module=None, every=None):
+    _BOOT_THREADS.append((fn, name or getattr(fn, '__name__', '?'),
+                          module, every))
+
+
 
 def _raw_update_listener(messages):
     """🔬 Dispatchdan ham OLDIN: telebot qabul qilgan har bir xabar
@@ -76,20 +95,14 @@ telebot.logger.addHandler(_h)
 # har bir so'rovni avtomatik qayta uradi — bitta uzilish endi ishni to'xtatmaydi.
 telebot.apihelper.RETRY_ON_ERROR = True
 telebot.apihelper.MAX_RETRIES = 3
-SUPER_ADMIN_ID = int(_require_env("SUPER_ADMIN_ID"))
 # 🏢 SaaS: bu botni boshqa do'konlarga sotganingizda, litsenziya muddatini
-# FAQAT siz (bot sotuvchisi) boshqarishi uchun. Do'kon egasi (SUPER_ADMIN_ID)
+# FAQAT siz (bot sotuvchisi) boshqarishi uchun. Do'kon egasi (CFG.SUPER_ADMIN_ID)
 # buni o'zgartira olmaydi. Agar bu bot faqat o'z do'koningiz uchun bo'lsa,
 # shunchaki bu o'zgaruvchini bo'sh qoldiring — litsenziya tekshiruvi ishlamaydi.
 SAAS_OWNER_ID = int(os.getenv("SAAS_OWNER_ID", "0") or "0")
-SHOP_LAT = 41.5566576
-SHOP_LON  = 60.6373704
-REVIEW_SECRET = os.getenv("REVIEW_SECRET", "BONUSMARKET_REVIEW")
 UZT = timezone(timedelta(hours=5))
 
 # ===== Bito integratsiyasi =====
-BITO_API_KEY = _require_env("BITO_API_KEY")
-BITO_ORG_ID = os.getenv("BITO_ORG_ID", "693fea06ff2118868c955b6c")  # ✅ Bonnu Market organizatsiyasi
 BITO_BONUS_ENABLED = True
 
 # ===== Anthropic (Claude) API =====
@@ -102,52 +115,23 @@ BITO_BASE_URL = "https://api.bito.uz/integration-api/integration/api/v2/"
 
 
 # DB
-if os.path.exists("/data"):
-    DB_PATH = "/data/market.db"
-else:
-    DB_PATH = "market.db"
+# ── 🗄  BAZA: har bir biznes uchun alohida SQLite fayl ──────────────
+# Avval bitta market.db bor edi. Endi q()/qone()/qall() joriy tenantning
+# fayliga yo'naltiriladi — chaqiruv joylari (384 ta) o'zgarmagan.
+# Batafsil: saas/tenant.py
+
+q = TEN.q
+qone = TEN.qone
+qall = TEN.qall
 
 # Botni bloklagan xodimlar — logni takroran to'ldirmaslik uchun
-_BLOCKED_LOGGED = set()
+_BLOCKED_LOGGED = TSet()
 
-conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-conn.execute("PRAGMA journal_mode=WAL")
-db = conn
 
-# ⚠️ MUHIM: butun bot BITTA ulanishdan foydalanadi (check_same_thread=False) va
-# unga bir nechta oqim murojaat qiladi: polling, API server, marketing_thread,
-# ombor eslatmasi, katalog yangilash, tenant aniqlash va h.k.
-# Qulfsiz holda ikki oqim bir vaqtda db.execute() chaqirsa SQLite
-# "bad parameter or other API misuse" xatosini beradi (amalda ko'rilgan).
-# Bundan tashqari q() kursor qaytargani uchun .fetchone() qulfdan TASHQARIDA
-# bajarilsa, oradagi boshqa so'rov natijani buzishi mumkin edi.
-# Shuning uchun barcha murojaat shu qulf ostida ketadi. RLock — chunki
-# qone/qall ichida q() chaqiriladi (ichma-ich olish kerak).
-_db_lock = threading.RLock()
+def DB_PATH_FN():
+    """Joriy tenantning baza fayli (eski DB_PATH o'rniga)."""
+    return TEN.db_path()
 
-def q(sql, params=()):
-    with _db_lock:
-        try:
-            cur = db.execute(sql, params)
-            db.commit()
-            return cur
-        except Exception as e:
-            # "duplicate column name" — har ishga tushishda mavjud ustunga ALTER TABLE
-            # urinilgani uchun chiqadi. Bu xato emas, migratsiya allaqachon bajarilgan.
-            msg = str(e)
-            if "duplicate column name" not in msg.lower():
-                print("DB ERR:", msg[:100], "SQL:", sql[:60])
-            return None
-
-def qone(sql, params=()):
-    with _db_lock:                 # o'qish ham qulf ostida — kursor buzilmasin
-        r = q(sql, params)
-        return r.fetchone() if r else None
-
-def qall(sql, params=()):
-    with _db_lock:
-        r = q(sql, params)
-        return r.fetchall() if r else []
 
 # Jadvallar
 q("""CREATE TABLE IF NOT EXISTS users (
@@ -466,11 +450,11 @@ def _bito_emp_name(it):
 def bito_sales_by_employee(date_from_iso, date_to_iso):
     """Bito'dan berilgan sana oralig'i uchun MAS'UL SHAXS bo'yicha savdoni oladi.
     dashboard/top/responsible + from_date/to_date → aniq sana filtri ishlaydi."""
-    if not BITO_API_KEY:
-        print("BITO ERR: BITO_API_KEY o'rnatilmagan", flush=True)
+    if not CFG.BITO_API_KEY:
+        print("BITO ERR: CFG.BITO_API_KEY o'rnatilmagan", flush=True)
         return None
     url = BITO_BASE_URL + "reports/dashboard/top/responsible"
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     body = {"from_date": date_from_iso, "to_date": date_to_iso,
             "sort_by": "gross_sales", "sort_order": "desc"}
     try:
@@ -556,7 +540,7 @@ def bito_sale_thread():
         time.sleep(30)
 
 # --- Xodimga shaxsiy bonus hisoboti (Bito xodim bog'lash) ---
-BITO_NAME_CACHE = []
+BITO_NAME_CACHE = TDict(template={"v": []})
 
 def bito_range_utc(date_from_str, date_to_str):
     """Ikki mahalliy sana (UZT) oralig'ini — kunning boshidan ikkinchi kunning oxirigacha — UTC ISO ga o'tkazadi."""
@@ -613,7 +597,7 @@ def compute_auto_sales_data():
         print("AUTO SALES ERR:", str(e)[:150], flush=True)
         return None
 
-DASH_SALES_CACHE = {"ts": 0, "data": None}
+DASH_SALES_CACHE = TDict(template={"ts": 0, "data": None})
 DASH_SALES_TTL = 120  # 2 daqiqa — tez-tez o'zgaradi, lekin sahifa tezligi uchun baribir keshlanadi
 
 def get_auto_sales_data_cached(force=False):
@@ -634,7 +618,7 @@ def get_bito_employee_names(days_back=365):
     """
     names = set()
     try:
-        headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+        headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
 
         # Sana oralig'ini hisoblash
         today = datetime.now(UZT)
@@ -664,7 +648,7 @@ def get_bito_employee_names(days_back=365):
 
     try:
         # 2) Haqiqiy xodimlar bazasi — savdo qilmagan YANGI xodimlar ham shu yerda ko'rinadi
-        headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+        headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
         r2 = requests.post(BITO_BASE_URL + "employee/get-paging",
                            json={"page": 1, "limit": 200}, headers=headers, timeout=15)
         if r2.status_code == 200:
@@ -744,9 +728,9 @@ def bito_employee_bonus_thread():
 # --- Bito API helperlari tugadi ---
 
 # ===== OMBOR ESLATMASI TIZIMI =====
-# ⚠️⚠️ DIQQAT: shu yerda ilgari BITO_ORG_ID QAYTA e'lon qilingan edi va u
+# ⚠️⚠️ DIQQAT: shu yerda ilgari CFG.BITO_ORG_ID QAYTA e'lon qilingan edi va u
 # 48-qatordagi os.getenv(...) natijasini JIM ravishda bekor qilardi. Ya'ni
-# BITO_ORG_ID muhit o'zgaruvchisini qo'yish HECH QANDAY ta'sir qilmasdi va
+# CFG.BITO_ORG_ID muhit o'zgaruvchisini qo'yish HECH QANDAY ta'sir qilmasdi va
 # yangi mijoz deploy qilsa, uning boti Bonnu Market bazasiga yozib ketardi.
 # O'chirildi. Bu yerga bu nomni QAYTA yozmang — sozlama faqat 48-qatorda.
 
@@ -756,12 +740,12 @@ def bito_supplier_credit():
     Qaytaradi: [{"id","name","amount"}, ...] — kamayish tartibida.
     ⚠️ Bito FAQAT summani beradi, qaytarish MUDDATINI saqlamaydi —
     muddat debt_due jadvalidan qo'shiladi."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     out, page = [], 1
     while page <= 5:
         try:
             r = requests.post(BITO_BASE_URL + "reports/pos/summary/credit/paging",
-                              json={"organization_ids": [BITO_ORG_ID],
+                              json={"organization_ids": [CFG.BITO_ORG_ID],
                                     "limit": 200, "page": page},
                               headers=headers, timeout=25)
             if r.status_code != 200:
@@ -864,7 +848,7 @@ def bito_cash_from_transaction():
     Har tranzaksiya yozuvida `cashbox_after_balance` bor — o'sha amaldan keyingi
     kassa holati, to'lov usuli bo'yicha ajratilgan. `transaction/get-paging`
     ishlashi tasdiqlangan, shuning uchun bu ishonchli zaxira yo'l."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         r = requests.post(BITO_BASE_URL + "transaction/get-paging",
                           json={"page": 1, "limit": 200, "sort": "-created_at"},
@@ -918,7 +902,7 @@ def bito_cash_on_hand():
     """💰 Kassalardagi jami pul — Bito balansidan (jonli tekshirilgan).
 
     Qaytaradi: (jami_summa, [{"name","amount"}, ...])"""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     # 2026-08-09 MCP jonli tekshiruv: balans bo'limi kassalarni NOM va
     # haqiqiy summa bilan qaytaradi (Naqd 31.2M...), eski tranzaksiya-
     # taxmini esa 10.7M ko'rsatib xato edi. To'g'ri yo'l birinchi.
@@ -930,7 +914,7 @@ def bito_cash_on_hand():
              "cashbox/get-all"]
     try:
         j, _p = _bito_try_paths("bito_balance_endpoint", cands,
-                                {"organization_ids": [BITO_ORG_ID]},
+                                {"organization_ids": [CFG.BITO_ORG_ID]},
                                 headers, "CASH ON HAND")
         if j is None:
             # ⚠️ Balans hisoboti manzili topilmadi — kassa qoldig'ini oxirgi
@@ -981,7 +965,7 @@ def bito_expense_types():
     chiqarib tashlanadi.
 
     Qaytaradi: [{"id","name","used"}, ...] — ko'p ishlatilgani tepada."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         r = requests.post(BITO_BASE_URL + "payment-type/get-all", json={},
                           headers=headers, timeout=25)
@@ -1060,7 +1044,7 @@ def bito_suppliers_with_balance():
     `supplier_ids` bilan MOS KELMAYDI — shuning uchun zakaz tavsiyasi hech qachon
     firma topa olmasdi (amalda ko'rilgan: 114 mahsulot bog'langan, 0 moslik).
     `supplier/get-paging` esa to'g'ri `_id` va `balance` (qarz) ni birga beradi."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     out, page = [], 1
     while page <= 20:
         try:
@@ -1153,7 +1137,7 @@ def firms_merged_list():
     return out
 
 
-FIRMA_TOKENS = {}  # uid -> oxirgi 8 ta token (eski tugmalar ham ishlasin)
+FIRMA_TOKENS = TDict()  # uid -> oxirgi 8 ta token (eski tugmalar ham ishlasin)
 
 
 def firma_token_new(uid):
@@ -1632,14 +1616,14 @@ def bito_recent_purchases(days=30):
     Manba: `purchase/get-paging` (jonli tekshirilgan) — `sort=-date` bilan
     yangisidan eskisiga qarab o'qiymiz va sana chegaradan o'tganda to'xtaymiz.
     Har yozuvdagi `total_to_pay` — o'sha xarid uchun TO'LANISHI kerak summa."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     cutoff = now_dt().date() - timedelta(days=days)
     out, page = [], 1
     while page <= 10:                       # 2000 xaridgacha — 30 kunga yetarli
         try:
             r = requests.post(BITO_BASE_URL + "purchase/get-paging",
                               json={"page": page, "limit": 200, "sort": "-date",
-                                    "organization_id": BITO_ORG_ID},
+                                    "organization_id": CFG.BITO_ORG_ID},
                               headers=headers, timeout=40)
             if r.status_code != 200:
                 print(f"PURCHASES: HTTP {r.status_code}", flush=True)
@@ -1796,7 +1780,7 @@ def bito_stock_and_cost():
     Manba: reports/dashboard/summary/product/chart-paging — qoldiq (`in_stock`)
     va birlik tannarxi (`cost`) birga keladi (jonli tekshirilgan 2026-07-31).
     Qaytaradi: {product_id: {"name","stock","cost"}}"""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     cands = ["reports/dashboard/summary/product/chart-pagin",
              "reports/dashboard/summary/product/chart-paging",
              "reports/dashboard/summary/product/pagin",
@@ -1806,7 +1790,7 @@ def bito_stock_and_cost():
     out, page = {}, 1
     while page <= 40:                       # ~8000 mahsulotgacha
         j, _p = _bito_try_paths("bito_stockcost_endpoint", cands,
-                                {"organization_ids": [BITO_ORG_ID],
+                                {"organization_ids": [CFG.BITO_ORG_ID],
                                  "page": page, "limit": 200},
                                 headers, "STOCK+COST")
         if j is None:
@@ -1837,14 +1821,14 @@ def sales_velocity(days=30):
 
     ⚠️ sales/by-item-pagin FAQAT sotilganlarni qaytaradi — umuman sotilmagan
     mahsulot ro'yxatda bo'lmaydi (bu ilgari aniqlangan). Ular uchun tezlik 0."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     start = (now_dt() - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00.000Z")
     out, page = {}, 1
     while page <= 30:
         try:
             r = requests.post(BITO_BASE_URL + "sales/by-item-pagin",
                               json={"page": page, "limit": 200, "from_date": start,
-                                    "organization_ids": [BITO_ORG_ID]},
+                                    "organization_ids": [CFG.BITO_ORG_ID]},
                               headers=headers, timeout=60)
             if r.status_code != 200:
                 print(f"VELOCITY: HTTP {r.status_code}", flush=True)
@@ -1998,7 +1982,7 @@ def order_recommendation(buffer_ratio=0.2):
 @bot.message_handler(commands=['zakaz_tavsiya'])
 def order_advice_cmd(message):
     """🛒 Firma kelish kunlariga qarab zakaz tavsiyasi + pul tekshiruvi."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     chat_id = message.chat.id
 
@@ -2076,7 +2060,7 @@ def order_advice_cmd(message):
 @bot.message_handler(commands=['pul'])
 def cash_calendar_cmd(message):
     """💰 30 kunlik pul taqvimi."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     chat_id = message.chat.id
 
@@ -2220,7 +2204,7 @@ def goal_daily_mark_cb(call):
         W_GOAL_NOTE[call.from_user.id] = did
 
 
-W_GOAL_NOTE = {}
+W_GOAL_NOTE = TDict()
 
 
 @bot.message_handler(func=lambda m: m.from_user.id in W_GOAL_NOTE
@@ -2245,7 +2229,7 @@ def maqsad_bugun_cb(call):
 
 @bot.message_handler(commands=['bugun'])
 def bugun_cmd(message):
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     bot.send_message(message.chat.id, "⏳ Bugungi reja tayyorlanmoqda...")
     threading.Thread(target=lambda: send_daily_plan(message.chat.id), daemon=True).start()
@@ -2299,7 +2283,7 @@ def _stock_index():
     return by_name, unit_by_name
 
 
-MAQSAD_TOKENS = {}
+MAQSAD_TOKENS = TDict()
 
 
 def maqsad_token_new(uid):
@@ -2318,7 +2302,7 @@ def maqsad_token_ok(uid, tok):
 @bot.message_handler(commands=['maqsad'])
 def maqsad_cmd(message):
     """🎯 Maqsadlarni belgilash oynasini ochadi."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     chat_id, uid = message.chat.id, message.from_user.id
     base = _public_base_url()
@@ -2504,7 +2488,7 @@ def build_goal_strategy(chat_id, g, base):
 @bot.message_handler(commands=['firmalar'])
 def firmalar_cmd(message):
     """💰 Firma jadvali va majburiy xarajatlarni kiritish oynasini ochadi."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     chat_id, uid = message.chat.id, message.from_user.id
     base = _public_base_url()
@@ -2530,7 +2514,7 @@ def firmalar_cmd(message):
 
 def bito_search_products(query, limit=10):
     """Mahsulot nomini qidirib topadi (product/get-paging orqali)."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         r = requests.post(BITO_BASE_URL + "product/get-paging",
                          json={"page": 1, "limit": limit, "search": query},
@@ -2553,7 +2537,7 @@ def bito_search_products(query, limit=10):
             # har mahsulotga alohida so'rov shart emas
             stock = 0
             for org in (it.get("organizations") or []):
-                if org.get("organization_id") == BITO_ORG_ID:
+                if org.get("organization_id") == CFG.BITO_ORG_ID:
                     stock = org.get("amount", 0) or 0
                     break
             result.append({"_id": it.get("_id"), "name": it.get("name", "?"),
@@ -2566,7 +2550,7 @@ def bito_search_products(query, limit=10):
 
 def bito_get_stock_for_product(product_id):
     """Bitta mahsulotning joriy qoldig'ini oladi."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         r = requests.post(BITO_BASE_URL + "product-warehouse/get-paging",
                          json={"page": 1, "limit": 20},
@@ -2586,7 +2570,7 @@ def bito_get_stock_for_product(product_id):
 
 def bito_get_stock_by_name(product_name, product_id):
     """Mahsulot nomi bo'yicha qidirib, product_id bilan moslashtiradi va qoldig'ini qaytaradi."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         r = requests.post(BITO_BASE_URL + "product-warehouse/get-paging",
                          json={"search": product_name, "limit": 10, "page": 1},
@@ -2603,10 +2587,10 @@ def bito_get_stock_by_name(product_name, product_id):
 # ===== KUNLIK AI SAVDO TAVSIYASI (xodimlarga cross-sell, boshliqqa narx/skidka) =====
 def bito_get_items_sorted(from_iso, to_iso, limit=50, ascending=False):
     """sales/by-item-pagin dan items_sold bo'yicha saralangan ro'yxatni oladi."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         body = {"page": 1, "limit": limit, "from_date": from_iso, "to_date": to_iso,
-                "organization_ids": [BITO_ORG_ID], "sort_by": "items_sold",
+                "organization_ids": [CFG.BITO_ORG_ID], "sort_by": "items_sold",
                 "sort_order": "asc" if ascending else "desc"}
         r = requests.post(BITO_BASE_URL + "sales/by-item-pagin", json=body, headers=headers, timeout=30)
         r.raise_for_status()
@@ -2622,7 +2606,7 @@ def bito_get_sold_product_ids(days, page_limit=300, max_pages=15):
     MUHIM: sales/by-item-pagin faqat SOTILGAN mahsulotlarni ko'rsatadi — umuman
     sotilmagan mahsulotlar bu hisobotda ko'rinmaydi, shuning uchun ularni aniqlash
     uchun butun katalogdan AYIRIB tashlash kerak (pastdagi funksiyaga qarang)."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     period_start = (now_dt() - timedelta(days=days)).strftime("%Y-%m-%d")
     df, dt_ = bito_range_utc(period_start, today_str())
     sold_ids = set()
@@ -2630,7 +2614,7 @@ def bito_get_sold_product_ids(days, page_limit=300, max_pages=15):
     while page <= max_pages:
         try:
             body = {"page": page, "limit": page_limit, "from_date": df, "to_date": dt_,
-                    "organization_ids": [BITO_ORG_ID]}
+                    "organization_ids": [CFG.BITO_ORG_ID]}
             r = requests.post(BITO_BASE_URL + "sales/by-item-pagin", json=body, headers=headers, timeout=30)
             r.raise_for_status()
             j = r.json(); d = j.get("data", {})
@@ -2656,7 +2640,7 @@ def bito_get_all_products_with_stock(page_limit=200, max_pages=30, min_stock=1):
     """Butun mahsulot katalogini (nomi, id, ombordagi qoldig'i) qaytaradi — faqat
     qoldig'i min_stock dan ko'p bo'lganlar (ombordan tugab qolgan mahsulotlar
     'turib qolgan' hisoblanmaydi, chunki sotib bo'lingan bo'lishi mumkin)."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     result = []
     page = 1
     while page <= max_pages:
@@ -2709,14 +2693,14 @@ ABC_SEGMENT_DESC = {
 
 def bito_get_customers_abc_xyz(from_date, to_date, max_pages=5, page_limit=200):
     """Bito'dan barcha mijozlarning ABC-XYZ segmentini oladi (sahifalab)."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     all_items = []
     page = 1
     while page <= max_pages:
         try:
             r = requests.post(BITO_BASE_URL + "reports/analysis/customers/abc-xyz",
                               json={"from_date": from_date, "to_date": to_date,
-                                    "organization_ids": [BITO_ORG_ID],
+                                    "organization_ids": [CFG.BITO_ORG_ID],
                                     "page": page, "limit": page_limit},
                               headers=headers, timeout=30)
             if r.status_code != 200:
@@ -2791,7 +2775,7 @@ def abc_segment_list(call):
     threading.Thread(target=run, daemon=True).start()
 
 # ===== Qoidalar (segment -> xodim -> vazifa matni) =====
-W_ABC_RULE = {}
+W_ABC_RULE = TDict()
 
 @bot.message_handler(commands=['abc_qoidalar'])
 def abc_qoidalar_cmd(message):
@@ -2903,7 +2887,7 @@ def abc_auto_task_thread():
                             emp_name = emp[1] if emp else "?"
                             cur = q("INSERT INTO tasks (given_by,employee_tg_id,employee_name,task,status,reminder_interval,last_reminded,created_at) "
                                     "VALUES (?,?,?,?,'Jarayonda',120,?,?)",
-                                    (SUPER_ADMIN_ID, emp_id, emp_name, task_text, now_str(), now_str()))
+                                    (CFG.SUPER_ADMIN_ID, emp_id, emp_name, task_text, now_str(), now_str()))
                             task_id = cur.lastrowid if cur else 0
                             q("INSERT OR IGNORE INTO abc_task_log (customer_id, segment, month, rule_id, created_at) VALUES (?,?,?,?,?)",
                               (cust_id, seg, month, rid, now_str()))
@@ -2924,8 +2908,8 @@ def abc_auto_task_thread():
 # nomzodlar Telegram orqali ariza topshiradi, AI ular bilan suhbat
 # qilib baholaydi, eng яхшилари boshliq/menejerga taklif qilinadi.
 # ══════════════════════════════════════════════════════════════════
-W_JOB_CREATE = {}   # boss/menejer: vakansiya yaratish holati
-W_APPLY = {}        # nomzod: ariza topshirish holati
+W_JOB_CREATE = TDict()   # boss/menejer: vakansiya yaratish holati
+W_APPLY = TDict()        # nomzod: ariza topshirish holati
 
 def _bot_username():
     try:
@@ -3405,8 +3389,8 @@ def apply_interview_location(message):
     job = _job_get(state["job_id"])
     lat, lon = message.location.latitude, message.location.longitude
     # Vakansiyaga xos manzil bo'lsa o'shani, bo'lmasa do'konning standart manzilini ishlatamiz
-    target_lat = job.get("target_lat") or SHOP_LAT
-    target_lon = job.get("target_lon") or SHOP_LON
+    target_lat = job.get("target_lat") or CFG.SHOP_LAT
+    target_lon = job.get("target_lon") or CFG.SHOP_LON
     radius = job.get("radius_km")
     dist_km = calc_dist(lat, lon, target_lat, target_lon) / 1000.0
     q("UPDATE job_applicants SET loc_lat=?, loc_lon=?, loc_distance_km=? WHERE job_id=? AND tg_id=?",
@@ -3455,7 +3439,7 @@ def get_total_stock_value():
     Bito'da bu uchun aniq bitta hujjatlashtirilgan endpoint yo'q — shuning uchun bir nechta
     ehtimoliy manzil sinaladi va ISHLAGANI keyingi safarlar uchun sozlamalarda eslab qolinadi
     (xuddi nakladnoy supplier_id/supliaer_id muammosidagi kabi usul)."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     candidates = [
         "reports/pos/summary/product/get-summary",
         "reports/pos/product-stock-summary",
@@ -3471,8 +3455,8 @@ def get_total_stock_value():
             # Faqat `organization_ids` yuborilsa → code 10001, data:"organization_id".
             # Ikkalasini ham yuboramiz — boshqa variantlar uchun ham mos kelsin.
             r = requests.post(BITO_BASE_URL + path,
-                             json={"organization_id": BITO_ORG_ID,
-                                   "organization_ids": [BITO_ORG_ID]},
+                             json={"organization_id": CFG.BITO_ORG_ID,
+                                   "organization_ids": [CFG.BITO_ORG_ID]},
                              headers=headers, timeout=15)
             if r.status_code != 200:
                 continue
@@ -3497,7 +3481,7 @@ def get_total_stock_value():
     print("STOCK VALUE: hech qaysi endpoint ishlamadi", flush=True)
     return None
 
-DASH_STOCKVAL_CACHE = {"ts": 0, "data": None}
+DASH_STOCKVAL_CACHE = TDict(template={"ts": 0, "data": None})
 DASH_STOCKVAL_TTL = 600  # 10 daqiqa — og'ir emas, lekin baribir keshlaymiz
 
 def get_total_stock_value_cached(force=False):
@@ -3561,13 +3545,13 @@ def bito_get_trades_for_employee(bname, from_iso, to_iso, max_pages=20, page_lim
     """Berilgan mas'ul shaxs (xodim) nomi bo'yicha davr ichidagi tugallangan
     savdolarni (trade) topadi. API 'responsible' bo'yicha ishonchli filtrlamasligi
     mumkin bo'lgani uchun, natijalarni CLIENT-SIDE ham tekshiramiz."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     trades = []
     page = 1
     while page <= max_pages:
         try:
             body = {"page": page, "limit": page_limit, "from_date": from_iso, "to_date": to_iso,
-                    "organization_id": BITO_ORG_ID, "organization_ids": [BITO_ORG_ID]}
+                    "organization_id": CFG.BITO_ORG_ID, "organization_ids": [CFG.BITO_ORG_ID]}
             r = requests.post(BITO_BASE_URL + "trade/get-paging", json=body, headers=headers, timeout=30)
             if r.status_code != 200:
                 print(f"TRADE PAGING ERR: HTTP {r.status_code}", flush=True)
@@ -3594,7 +3578,7 @@ def bito_get_trades_for_employee(bname, from_iso, to_iso, max_pages=20, page_lim
 
 def bito_get_trade_full(trade_id):
     """Bitta savdo (trade) hujjatining to'liq tafsilotini oladi (mahsulotlar bilan)."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         r = requests.get(BITO_BASE_URL + f"trade/get-by-id/{trade_id}", headers=headers, timeout=15)
         if r.status_code == 200:
@@ -3861,7 +3845,7 @@ def compute_stock_alerts(top_n=None, days_threshold=None):
             top_n = int(get_setting("stock_top_count", "30"))
         if days_threshold is None:
             days_threshold = float(get_setting("stock_days_threshold", "1"))
-        headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+        headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
 
         # 1. Top N eng ko'p sotiladigan mahsulotlar (bu oy)
         month_start = now_dt().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -3870,7 +3854,7 @@ def compute_stock_alerts(top_n=None, days_threshold=None):
         r = requests.post(BITO_BASE_URL + "sales/by-item-pagin",
                          json={"page": 1, "limit": top_n,
                                "from_date": month_start_utc,
-                               "organization_ids": [BITO_ORG_ID]},
+                               "organization_ids": [CFG.BITO_ORG_ID]},
                          headers=headers, timeout=60)
         r.raise_for_status()
         resp_json = r.json()
@@ -3945,7 +3929,7 @@ def compute_stock_alerts(top_n=None, days_threshold=None):
 
 # 🔄 Dashboard uchun oddiy kesh — har safar sahifa ochilganda Bito'ga 70 tagacha
 # so'rov yubormaslik uchun (bu og'ir operatsiya). TTL: 5 daqiqa.
-DASH_STOCK_CACHE = {"ts": 0, "data": None}
+DASH_STOCK_CACHE = TDict(template={"ts": 0, "data": None})
 DASH_STOCK_TTL = 300
 
 def get_stock_alerts_cached(force=False):
@@ -4336,12 +4320,12 @@ def get_month_sales():
     return float(r[0]) if r else 0
 
 # States
-W_REGISTER = {}; W_TASK = {}; W_PHOTO_TASK = {}; W_PENDING_REVIEW = {}
-W_REGISTER = {}; W_SALARY = {}; W_POSITION = {}; W_WORK_TIME = {}
-W_LOCATION = {}; W_COMPLAINT = {}; W_SCHEDULE = {}; W_PLAN = {}
-W_SETTING = {}; W_DAILY_SALE = {}; W_GROUP_MSG = {}
-W_ZLIM = {}   # uid -> qaysi zakaz-limit sozlamasi kiritilmoqda
-W_CUSTOM_DATE = {}; W_REVIEW_V2 = {}; W_TASK_TEXT = {}
+W_REGISTER = TDict(); W_TASK = TDict(); W_PHOTO_TASK = TDict(); W_PENDING_REVIEW = TDict()
+W_REGISTER = TDict(); W_SALARY = TDict(); W_POSITION = TDict(); W_WORK_TIME = TDict()
+W_LOCATION = TDict(); W_COMPLAINT = TDict(); W_SCHEDULE = TDict(); W_PLAN = TDict()
+W_SETTING = TDict(); W_DAILY_SALE = TDict(); W_GROUP_MSG = TDict()
+W_ZLIM = TDict()   # uid -> qaysi zakaz-limit sozlamasi kiritilmoqda
+W_CUSTOM_DATE = TDict(); W_REVIEW_V2 = TDict(); W_TASK_TEXT = TDict()
 
 # Keyboards
 # 🎛 MENYU BOSHQARUVI: boshliq ⚙️ Sozlamalar orqali istalgan tugmani yashirishi/ochishi mumkin.
@@ -4518,13 +4502,13 @@ def menu_group_back(message):
                      reply_markup=get_kb(message.from_user.id))
 
 
-W_MENU_GRP = {}   # uid -> {"step": "name"|"pick", "name", "sel": set()}
+W_MENU_GRP = TDict()   # uid -> {"step": "name"|"pick", "name", "sel": set()}
 
 
 @bot.message_handler(commands=['menu'])
 def menu_manage_cmd(message):
     """📁 Menyu guruhlarini boshqarish (faqat asosiy boshliq)."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     groups = menu_groups()
     kb = types.InlineKeyboardMarkup(row_width=1)
@@ -4544,7 +4528,7 @@ def menu_manage_cmd(message):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("mgrp:"))
 def menu_grp_cb(call):
-    if call.from_user.id != SUPER_ADMIN_ID:
+    if call.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     _ack(call)
     uid, chat_id = call.from_user.id, call.message.chat.id
@@ -4892,23 +4876,23 @@ def dashboard_cache_warmer_thread():
         loop_count += 1
         time.sleep(120)
 
-threading.Thread(target=reminder_thread, daemon=True).start()
-threading.Thread(target=tips_thread, daemon=True).start()
+_boot_thread(reminder_thread)
+_boot_thread(tips_thread)
 # daily_sale_thread o'chirildi — savdo endi Bito'dan avtomatik olinadi
-threading.Thread(target=bito_sale_thread, daemon=True).start()
-threading.Thread(target=bito_employee_bonus_thread, daemon=True).start()
-threading.Thread(target=stock_alert_thread, daemon=True).start()
-threading.Thread(target=ai_advice_thread, daemon=True).start()
-threading.Thread(target=license_check_thread, daemon=True).start()
-threading.Thread(target=abc_auto_task_thread, daemon=True).start()
-threading.Thread(target=dashboard_cache_warmer_thread, daemon=True).start()
+_boot_thread(bito_sale_thread)
+_boot_thread(bito_employee_bonus_thread)
+_boot_thread(stock_alert_thread)
+_boot_thread(ai_advice_thread)
+_boot_thread(license_check_thread)
+_boot_thread(abc_auto_task_thread)
+_boot_thread(dashboard_cache_warmer_thread)
 # 📣 promo_daily_thread pastroqda aniqlanadi — start ham o'sha yerda emas,
 # bu yerda emas (NameError bo'lardi); qidiring: PROMO_THREAD_START
 
 # /reset_start — Yangi boshlash uchun: vazifalar tarixi, mijoz baholari va balllarni tozalash
-W_RESET_CONFIRM = {}
+W_RESET_CONFIRM = TDict()
 
-W_APP_PASSWORD = {}
+W_APP_PASSWORD = TDict()
 
 @bot.message_handler(commands=['parol'])
 def set_app_password_cmd(message):
@@ -4992,7 +4976,7 @@ def set_license_cmd(message):
 
 @bot.message_handler(commands=['reset_start'])
 def reset_start_cmd(message):
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         bot.send_message(message.chat.id, "⛔ Faqat bosh administrator uchun."); return
     tasks_count = qone("SELECT COUNT(*) FROM tasks", ())[0]
     reviews_count = qone("SELECT COUNT(*) FROM reviews", ())[0]
@@ -5011,7 +4995,7 @@ def reset_start_cmd(message):
 @bot.message_handler(commands=['reset_confirm'])
 def reset_confirm_cmd(message):
     tg_id = message.from_user.id
-    if tg_id != SUPER_ADMIN_ID:
+    if tg_id != CFG.SUPER_ADMIN_ID:
         bot.send_message(message.chat.id, "⛔ Faqat bosh administrator uchun."); return
     if tg_id not in W_RESET_CONFIRM:
         bot.send_message(message.chat.id, "⚠️ Avval /reset_start buyrug'ini yuboring."); return
@@ -5039,13 +5023,13 @@ def reset_confirm_cmd(message):
         bot.send_message(message.chat.id, f"❌ Xatolik: {str(e)[:200]}")
 
 # ===== AI MASLAHAT CHAT REJIMI =====
-AI_CHAT_SESSIONS = {}  # tg_id -> [{"role": "user/model", "parts": [{"text": "..."}]}]
-AI_CHAT_CONTEXT = {}   # tg_id -> bito_context string (cached)
+AI_CHAT_SESSIONS = TDict()  # tg_id -> [{"role": "user/model", "parts": [{"text": "..."}]}]
+AI_CHAT_CONTEXT = TDict()   # tg_id -> bito_context string (cached)
 
 def get_bito_context_for_ai():
     """Bito'dan joriy holat uchun qisqa kontekst oladi (AI uchun) — mahsulotlar + xodimlar."""
     try:
-        headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+        headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
         import datetime as _dt
         today = now_dt()
         month_start = today.replace(day=1).strftime("%Y-%m-%d")
@@ -5057,7 +5041,7 @@ def get_bito_context_for_ai():
         # 1. Oylik top mahsulotlar
         try:
             r1 = requests.post(BITO_BASE_URL + "sales/by-item-pagin",
-                json={"page":1,"limit":15,"from_date":to_utc(month_start),"organization_ids":[BITO_ORG_ID]},
+                json={"page":1,"limit":15,"from_date":to_utc(month_start),"organization_ids":[CFG.BITO_ORG_ID]},
                 headers=headers, timeout=20)
             r1.raise_for_status()
             top_items = (r1.json().get("data",{}) or {}).get("data",[]) or []
@@ -5138,7 +5122,7 @@ def ask_ai_chat(tg_id, user_message):
     AI_CHAT_SESSIONS[tg_id].append({"role": "model", "parts": [{"text": answer}]})
     return answer
 
-W_AI_CHAT = set()  # AI chat rejimida turgan foydalanuvchilar
+W_AI_CHAT = TSet()  # AI chat rejimida turgan foydalanuvchilar
 
 def call_ai(messages_gemini, prompt_text):
     """Gemini'ga murojaat qiladi, muvaffaqiyatsiz bo'lsa Anthropic'ga o'tadi."""
@@ -5195,7 +5179,7 @@ def btn_pul(message):
 @bot.message_handler(func=lambda m: m.text == "🎯 Zakaz limiti")
 def btn_zakaz_limit(message):
     """🎯 Ertangi zakaz uchun xavfsiz summa — pul harakati tahlilidan."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     chat_id = message.chat.id
 
@@ -5221,7 +5205,7 @@ def btn_zakaz_limit(message):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("zlim_"))
 def zakaz_limit_cfg(call):
-    if call.from_user.id != SUPER_ADMIN_ID:
+    if call.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     _ack(call)
     chat_id = call.message.chat.id
@@ -5394,12 +5378,12 @@ def zakaz_limit_thread():
                         set_setting("zakaz_limit_day", today)
                         try:
                             z = zakaz_limit()
-                            bot.send_message(SUPER_ADMIN_ID, zakaz_limit_text(z),
+                            bot.send_message(CFG.SUPER_ADMIN_ID, zakaz_limit_text(z),
                                              parse_mode="HTML")
                         except Exception as e:
                             print("ZAKAZ LIMIT DAILY ERR:", str(e)[:200], flush=True)
                             try:
-                                bot.send_message(SUPER_ADMIN_ID,
+                                bot.send_message(CFG.SUPER_ADMIN_ID,
                                                  f"⚠️ Zakaz limitini hisoblab bo'lmadi: {str(e)[:150]}")
                             except Exception:
                                 pass
@@ -5532,7 +5516,7 @@ def ai_send_to_employees(call):
     def send_all():
         # Bito'dan xodimlar ma'lumotini olish
         try:
-            headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+            headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
             import datetime as _dt
             week_start = (now_dt() - timedelta(days=6)).strftime("%Y-%m-%d")
             today_s = now_dt().strftime("%Y-%m-%d")
@@ -5588,7 +5572,7 @@ ZAKAZ_PAGE_SIZE = 20
 
 def get_supplier_markup(page=0, search=None):
     """Firmalar ro'yxatini inline keyboard sifatida qaytaradi."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     params = {"page": page + 1, "limit": ZAKAZ_PAGE_SIZE, "sort": "-last_sale_at"}
     if search:
         params["search"] = search
@@ -5599,7 +5583,7 @@ def get_supplier_markup(page=0, search=None):
         # Try direct path
         base = "https://api.bito.uz/integration-api/integration/api/v2/"
         r = requests.post(base + "supplier/get-paging",
-                         json=params, headers={"api-key": BITO_API_KEY, "Content-Type": "application/json"},
+                         json=params, headers={"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"},
                          timeout=15)
         r.raise_for_status()
         j = r.json()
@@ -5646,7 +5630,7 @@ def zakaz_menu(message):
     if not is_boss_or_mgr(message.from_user.id): return
     show_supplier_list(message.chat.id, page=0)
 
-W_ZAKAZ_SEARCH = {}
+W_ZAKAZ_SEARCH = TDict()
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("zakaz_"))
 def zakaz_cb(call):
@@ -5717,7 +5701,7 @@ def generate_zakaz_advice(chat_id, supplier_id, weeks=1):
         return
     try:
         _t0 = time.time()  # ⏱ Umumiy vaqt hisoblagichi
-        headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+        headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
         base = "https://api.bito.uz/integration-api/integration/api/v2/"
 
         # 1. Firma ma'lumoti
@@ -5856,7 +5840,7 @@ def generate_zakaz_advice(chat_id, supplier_id, weeks=1):
         while page <= 10:  # xavfsizlik uchun max 10 sahifa (~2000 mahsulot)
             r_sales = requests.post(base + "sales/by-item-pagin",
                 json={"page": page, "limit": 200, "from_date": to_utc(week_start),
-                      "organization_ids": [BITO_ORG_ID]},
+                      "organization_ids": [CFG.BITO_ORG_ID]},
                 headers=headers, timeout=30)
             if r_sales.status_code != 200:
                 break
@@ -6093,7 +6077,7 @@ Javobni oddiy, qisqa va amaliy tilda yoz. Raqamlarni takrorlama, faqat izoh ber.
 
 # ===== SUPPLIER FILTER TEST VA ROBUST QIDIRUV =====
 def _bito_headers():
-    return {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    return {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
 
 def _bito_base():
     return "https://api.bito.uz/integration-api/integration/api/v2/"
@@ -6479,7 +6463,7 @@ def execute_voice_intent(tg_id, chat_id, intent_data, transcript):
         if not param:
             bot.send_message(chat_id, "🎤 Qaysi firma uchun zakaz kerakligini ayting (masalan: \"Hydrolife uchun zakaz\")."); return
         try:
-            headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+            headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
             r = requests.post(BITO_BASE_URL + "supplier/get-paging",
                               json={"page": 1, "limit": 5, "search": param},
                               headers=headers, timeout=15)
@@ -6500,7 +6484,7 @@ def execute_voice_intent(tg_id, chat_id, intent_data, transcript):
 
     elif intent == "stock":
         try:
-            headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+            headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
             r = requests.post(BITO_BASE_URL + "product/get-paging",
                               json={"page": 1, "limit": 1}, headers=headers, timeout=15)
             total = 0
@@ -6618,7 +6602,7 @@ def _agent_tool_run(tg_id, chat_id, name, inp):
 
         elif name == "mahsulot_qidirish":
             nom = (inp.get("nom") or "").strip()
-            headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+            headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
             r = requests.post(BITO_BASE_URL + "product/get-paging",
                               json={"page": 1, "limit": 6, "search": nom}, headers=headers, timeout=20)
             d = r.json().get("data", {}) if r.status_code == 200 else {}
@@ -6652,7 +6636,7 @@ def _agent_tool_run(tg_id, chat_id, name, inp):
 
         elif name == "zakaz_tavsiyasi":
             firma = (inp.get("firma") or "").strip()
-            headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+            headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
             r = requests.post(BITO_BASE_URL + "supplier/get-paging",
                               json={"page": 1, "limit": 3, "search": firma}, headers=headers, timeout=15)
             items = (r.json().get("data", {}) or {}).get("data", []) if r.status_code == 200 else []
@@ -6735,7 +6719,7 @@ def ai_agent_answer(tg_id, chat_id, question, max_iters=5):
 # 4) Mahsulotlar Bito katalogi bilan moslashtiriladi
 # 5) Tasdiqlangach — Bito'ga xarid (purchase) sifatida yuklanadi
 # ══════════════════════════════════════════════════════════════════
-W_NAK = {}  # uid -> {"step":..., "items":[...], "supplier":..., "matches":[...]}
+W_NAK = TDict()  # uid -> {"step":..., "items":[...], "supplier":..., "matches":[...]}
 
 # 💾 SESSIYA DOIMIYLIGI: nakladnoy sessiyasi avval faqat xotirada (W_NAK) saqlanardi —
 # har deploy/qayta ishga tushishda o'chib, "Chiroyli tahrirlash" BO'SH ochilardi
@@ -6770,7 +6754,7 @@ def nak_session_restore(uid):
             print("NAK SESSION RESTORE ERR:", str(e)[:120], flush=True)
     return None
 
-NAK_WEBAPP_CACHE = {}  # uid -> items list, always the CURRENT data for that user's open web app
+NAK_WEBAPP_CACHE = TDict()  # uid -> items list, always the CURRENT data for that user's open web app
 
 def nak_webapp_store(uid, items, token):
     """"Chiroyli tahrirlash" ma'lumotini keshga VA bazaga yozadi.
@@ -6853,7 +6837,7 @@ def nak_session_clear(uid):
     except Exception:
         pass
 
-W_NAK_CAT = {}  # uid -> {"step": "search", "cands": [...]} — yangi mahsulot kategoriyasini tanlash uchun
+W_NAK_CAT = TDict()  # uid -> {"step": "search", "cands": [...]} — yangi mahsulot kategoriyasini tanlash uchun
                        # (serverda saqlanadi — URL orqali eski ma'lumot kesh bo'lib qolish muammosining oldini oladi)
 
 def _nak_hints_block():
@@ -7206,10 +7190,10 @@ def bito_revision_create(description="Bot inventarizatsiyasi", set_counted=False
     ⚠️ pending holatda qoldiqqa TEGMAYDI. Faqat `set-status` bilan `done`
     qilinganda qoldiq o'zgaradi — shuning uchun yakunlash alohida tasdiqlanadi.
     Sinovdan o'tgan (2026-08-01): starting_date MAJBURIY, aks holda 400."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     now_iso = now_dt().strftime("%Y-%m-%dT%H:%M:%S.000Z")
     body = {
-        "organization_id": BITO_ORG_ID,
+        "organization_id": CFG.BITO_ORG_ID,
         "warehouse_id": tenant_setting("bito_warehouse_id", "69424f36a3a3cc43da908320"),
         "responsible_id": tenant_setting("bito_responsible_id", "693fe9caff2118868c9554b1"),
         "starting_date": now_iso,
@@ -7240,10 +7224,10 @@ def bito_revision_add_products(rev_id, product_ids, counted=None):
     counted: {product_id: sanalgan_son} — agar berilsa, sanalgan sonni ham
     yozishga urinamiz. ⚠️ Bu maydon Swagger'da hujjatlashtirilmagan, shuning
     uchun bir nechta ehtimoliy nom sinaladi va natija logga yoziladi."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     now_iso = now_dt().strftime("%Y-%m-%dT%H:%M:%S.000Z")
     body = {
-        "organization_id": BITO_ORG_ID,
+        "organization_id": CFG.BITO_ORG_ID,
         "warehouse_id": tenant_setting("bito_warehouse_id", "69424f36a3a3cc43da908320"),
         "responsible_id": tenant_setting("bito_responsible_id", "693fe9caff2118868c9554b1"),
         "starting_date": now_iso,
@@ -7272,10 +7256,10 @@ def bito_revision_add_products(rev_id, product_ids, counted=None):
 
 def _rev_try(rev_id, extra):
     """Inventarizatsiyaga mahsulot qo'shishning bitta shaklini sinaydi."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     now_iso = now_dt().strftime("%Y-%m-%dT%H:%M:%S.000Z")
     body = {
-        "organization_id": BITO_ORG_ID,
+        "organization_id": CFG.BITO_ORG_ID,
         "warehouse_id": tenant_setting("bito_warehouse_id", "69424f36a3a3cc43da908320"),
         "responsible_id": tenant_setting("bito_responsible_id", "693fe9caff2118868c9554b1"),
         "starting_date": now_iso, "ending_date": now_iso,
@@ -7296,7 +7280,7 @@ def bito_revision_status(rev_id, status):
     """📋 Holatni o'zgartiradi: pending → in_progress → done | canceled.
 
     ⚠️ `done` QOLDIQNI O'ZGARTIRADI va qaytarib bo'lmaydi."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         r = requests.put(BITO_BASE_URL + f"revision/set-status/{rev_id}",
                          json={"status": status}, headers=headers, timeout=30)
@@ -7309,7 +7293,7 @@ def bito_revision_status(rev_id, status):
 
 
 def bito_revision_get(rev_id):
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         r = requests.get(BITO_BASE_URL + f"revision/get-by-id/{rev_id}",
                          headers=headers, timeout=25)
@@ -7326,7 +7310,7 @@ def inv_test_cmd(message):
 
     Xavfsiz: yaratilgan inventarizatsiya `pending` holatda qoladi,
     qoldiqqa TEGMAYDI. Sinovdan keyin Bito ilovasidan o'chirasiz."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     chat_id = message.chat.id
 
@@ -7437,7 +7421,7 @@ def bito_set_plu(product_id, plu):
       5) QAYTA O'QIB tekshiramiz — Bito 200 qaytarib ham yozmasligi mumkin
 
     Qaytaradi: (True, None) yoki (False, "sabab")"""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         r = requests.get(BITO_BASE_URL + f"product/get-by-id/{product_id}",
                          headers=headers, timeout=20)
@@ -7458,17 +7442,17 @@ def bito_set_plu(product_id, plu):
     # 3) custom_fields — mavjudlarini saqlab, PLU'ni qo'shamiz/yangilaymiz
     cfs, found = [], False
     for cf in (p.get("custom_fields") or []):
-        if cf.get("_id") == PLU_FIELD_ID:
-            cfs.append({"_id": PLU_FIELD_ID, "value": int(plu)}); found = True
+        if cf.get("_id") == CFG.PLU_FIELD_ID:
+            cfs.append({"_id": CFG.PLU_FIELD_ID, "value": int(plu)}); found = True
         else:
             cfs.append(cf)
     if not found:
-        cfs.append({"_id": PLU_FIELD_ID, "value": int(plu)})
+        cfs.append({"_id": CFG.PLU_FIELD_ID, "value": int(plu)})
 
     orgs = []
-    for o in (p.get("organizations") or [{"organization_id": BITO_ORG_ID}]):
+    for o in (p.get("organizations") or [{"organization_id": CFG.BITO_ORG_ID}]):
         org = {
-            "organization_id": o.get("organization_id") or BITO_ORG_ID,
+            "organization_id": o.get("organization_id") or CFG.BITO_ORG_ID,
             "is_available": bool(o.get("is_available", True)),
             "max_stock": o.get("max_stock") or 0,
             "yellow_line": o.get("yellow_line") or 0,
@@ -7570,7 +7554,7 @@ def plu_plan_for_products(product_ids):
 
 
 
-PLU_PENDING = {}  # uid -> [{"id","name","plu"}, ...] tasdiqlashni kutayotgan reja
+PLU_PENDING = TDict()  # uid -> [{"id","name","plu"}, ...] tasdiqlashni kutayotgan reja
 
 
 def _offer_plu_assignment(chat_id, uid, product_ids):
@@ -7655,7 +7639,7 @@ def plu_apply_callback(call):
     threading.Thread(target=run, daemon=True).start()
 
 
-PLU_REVIEW = {}  # uid -> {"rows":[{"id","name","plu"}], "token": str}
+PLU_REVIEW = TDict()  # uid -> {"rows":[{"id","name","plu"}], "token": str}
 
 
 def plu_build_proposal():
@@ -7695,7 +7679,7 @@ def plu_build_proposal():
 @bot.message_handler(commands=['plu_taklif'])
 def plu_proposal_cmd(message):
     """⚖️ Teskari tartibdagi PLU taxminini tuzib, tahrirlanadigan oynada ochadi."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     chat_id, uid = message.chat.id, message.from_user.id
 
@@ -7753,7 +7737,7 @@ def plu_test_cmd(message):
     """🧪 BITTA mahsulotga PLU yozib sinaydi — ommaviy yozishdan oldin.
     Foydalanish: /plu_test <mahsulot nomi>
     Raqam avtomatik tanlanadi (eng kattadan keyingi bo'sh)."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     chat_id = message.chat.id
     name = message.text.replace("/plu_test", "", 1).strip()
@@ -7803,7 +7787,7 @@ def plu_report_cmd(message):
 
     Ma'lumot katalog skanidan olinadi (refresh_nak_catalog) — qo'shimcha so'rov
     yubormaydi. Hech qanday narsa YOZILMAYDI, faqat o'qiydi."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     chat_id = message.chat.id
     bot.send_message(chat_id, "⏳ Katalog o'qilmoqda (10 000+ mahsulot)...")
@@ -7869,7 +7853,7 @@ def test_purchase_cmd(message):
     """Bito purchase/create sxemasini SINOV uchun: bitta mahsulot, kichik miqdor.
     Foydalanish: /test_purchase <mahsulot nomi> [soni] [narxi]
     Masalan: /test_purchase Coca-Cola 1 1000"""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     parts = message.text.split()
     if len(parts) < 2:
@@ -7891,7 +7875,7 @@ def test_purchase_cmd(message):
     bot.send_message(chat_id, f"🧪 Sinov: '{pname}' × {qty:g} dona, {price:,.0f} so'mdan. Qidirilmoqda...")
 
     def run():
-        headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+        headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
         try:
             r = requests.post(BITO_BASE_URL + "product/get-paging",
                               json={"page": 1, "limit": 3, "search": pname},
@@ -7906,7 +7890,7 @@ def test_purchase_cmd(message):
             wh_id = tenant_setting("bito_warehouse_id", "69424f36a3a3cc43da908320")
             products = [{"product_id": pid, "amount": qty, "cost": price}]
             body = {
-                "organization_id": BITO_ORG_ID,
+                "organization_id": CFG.BITO_ORG_ID,
                 "state": "new",
                 "date": today_str(),
                 "income_date": today_str(),
@@ -7988,7 +7972,7 @@ def nakladnoy_cmd(message):
         "<b>Excel</b> faylini yuboring — men o'qib, ro'yxatini ko'rsataman. "
         "Siz tekshirib, tasdiqlaganingizdan keyingina Bito'ga yuklanadi.", parse_mode="HTML")
 
-W_POSDB = {}
+W_POSDB = TDict()
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("posdb:"))
@@ -8322,19 +8306,19 @@ def nak_ai_select(items, cands):
 # aniq/yuqori ishonchli moslik topilsa, Claude'ga UMUMAN murojaat qilinmaydi.
 # Faqat chindan noaniq qolgan qatorlar uchungina AI (token sarflab) ishlatiladi.
 # ══════════════════════════════════════════════════════════════════
-NAK_CATALOG_CACHE = {"ts": 0, "products": []}  # [{"id":, "name":, "key":<translit+norm>}, ...]
+NAK_CATALOG_CACHE = TDict(template={"ts": 0, "products": []})  # [{"id":, "name":, "key":<translit+norm>}, ...]
 
 # ⚖️ PLU — tarozi kodi. Bito'da bu ALOHIDA ustun emas, "custom field":
-#   mahsulot ichida  "custom_fields": [{"_id": <PLU_FIELD_ID>, "value": 481}]
+#   mahsulot ichida  "custom_fields": [{"_id": <CFG.PLU_FIELD_ID>, "value": 481}]
 # Maydon ta'rifi (bito_custom_field_get_all orqali tekshirilgan, 2026-07-26):
 #   name="PLU", code="plu", type="number", unique=true, is_visible=false
 # ⚠️ Bu ikkala ID har bir Bito tenantida BOSHQACHA bo'ladi — ular Bonnu
 # Market'ga tegishli. Yangi mijozga sotilganda muhit o'zgaruvchisi orqali
 # almashtirilishi SHART, aks holda PLU noto'g'ri maydonga yozilishi yoki
 # kg mahsulotlar umuman aniqlanmasligi mumkin.
-PLU_FIELD_ID = os.getenv("BITO_PLU_FIELD_ID", "69426b2ec75f38c3f5d9e91e")
+# [tenant] CFG.PLU_FIELD_ID = os.getenv("BITO_PLU_FIELD_ID", "69426b2ec75f38c3f5d9e91e")
 # Kilogram o'lchov birligi (bito_uom_get_all orqali tekshirilgan)
-KG_MEASURE_ID = os.getenv("BITO_KG_MEASURE_ID", "693fea08ff2118868c955d18")
+# [tenant] CFG.KG_MEASURE_ID = os.getenv("BITO_KG_MEASURE_ID", "693fea08ff2118868c955d18")
 
 # Katalog skanida yig'iladigan PLU statistikasi
 NAK_PLU_STATS = {"ts": 0, "max": 0, "used": set(), "kg_total": 0,
@@ -8349,7 +8333,7 @@ def _plu_value(product):
     har doim songa keltiramiz. Bundan tashqari `custom_fields` butunlay
     bo'sh massiv bo'lishi yoki `value` null bo'lishi mumkin."""
     for cf in (product.get("custom_fields") or []):
-        if cf.get("_id") != PLU_FIELD_ID:
+        if cf.get("_id") != CFG.PLU_FIELD_ID:
             continue
         raw = cf.get("value")
         if raw is None or raw == "":
@@ -8362,10 +8346,10 @@ def _plu_value(product):
     return None
 
 NAK_CATALOG_TTL = 1800  # 30 daqiqa — katalog "tez-tez o'zgarmaydi" deb belgilangan
-NAK_CATEGORY_CACHE = {"ts": 0, "categories": []}  # [{"id":, "name":}, ...] — "Chiroyli tahrirlash"da
+NAK_CATEGORY_CACHE = TDict(template={"ts": 0, "categories": []})  # [{"id":, "name":}, ...] — "Chiroyli tahrirlash"da
                                                     # yangi mahsulot uchun kategoriya tanlash ro'yxati
 
-NAK_UOM_CACHE = {"ts": 0, "uoms": []}  # [{"id":, "name":}, ...] — o'lchov birliklari
+NAK_UOM_CACHE = TDict(template={"ts": 0, "uoms": []})  # [{"id":, "name":}, ...] — o'lchov birliklari
 
 # 📏 Zaxira ro'yxat: Bito API'dan olib bo'lmasa ham, tanlagich BO'SH QOLMASLIGI kerak.
 # Bu ID'lar aynan shu hisob uchun Bito'dan tekshirib olingan (faol, ombor turidagilar).
@@ -8385,7 +8369,7 @@ def refresh_nak_uoms(force=False):
     now_ts = time.time()
     if not force and NAK_UOM_CACHE["uoms"] and (now_ts - NAK_UOM_CACHE["ts"]) < NAK_CATALOG_TTL:
         return
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     # ⚠️ 2026-07-26: measure/get-all, uom/get-all, measure/get-paging, uom/get-paging —
     # to'rttasi ham HTTP 404 qaytardi (integration-api'da bu resurs ochilmagan).
     # Bito'dan jonli tekshirildi: faol inventar birliklari AYNAN Kilogram, Dona, Blok
@@ -8447,7 +8431,7 @@ def refresh_nak_categories(force=False):
     now_ts = time.time()
     if not force and NAK_CATEGORY_CACHE["categories"] and (now_ts - NAK_CATEGORY_CACHE["ts"]) < NAK_CATALOG_TTL:
         return
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     cats = []
     try:
         for page in range(1, 6):  # ~1000 kategoriyagacha yetarli
@@ -8498,7 +8482,7 @@ def refresh_nak_catalog(force=False):
     now_ts = time.time()
     if not force and NAK_CATALOG_CACHE["products"] and (now_ts - NAK_CATALOG_CACHE["ts"]) < NAK_CATALOG_TTL:
         return
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     products = []
     max_sku = 0
     plu_max, plu_used, plu_dups = 0, {}, {}
@@ -8545,7 +8529,7 @@ def refresh_nak_catalog(force=False):
                 break
             for p in items:
                 pid, pname = p.get("_id"), p.get("name")
-                is_kg = ((p.get("measure") or {}).get("_id") == KG_MEASURE_ID)
+                is_kg = ((p.get("measure") or {}).get("_id") == CFG.KG_MEASURE_ID)
                 got = _plu_value(p)
                 if pid and pname:
                     products.append({"id": pid, "name": pname, "key": _translit_and_norm(pname),
@@ -8671,7 +8655,7 @@ def nak_catalog_warmer_thread():
 # ⚠️ Funksiya shu yerda (fayl oxiriga yaqin) aniqlangani uchun, uni ishga tushirish
 # chaqiruvi ham SHU YERDA turishi kerak — aks holda "NameError: not defined" bo'ladi
 # (fayl yuqorisidagi umumiy thread-boshlash bloki bu funksiya aniqlanishidan OLDIN ishlaydi).
-threading.Thread(target=nak_catalog_warmer_thread, daemon=True).start()
+_boot_thread(nak_catalog_warmer_thread)
 
 def _nak_norm(name):
     """Solishtirish uchun nomni soddalashtiradi (katta-kichik harf, ortiqcha bo'shliq)."""
@@ -8719,7 +8703,7 @@ def nak_save_alias(name, product_id, product_name, price=None, block_size=None, 
            measure_id, sale_price, now_str(), now_str()))
 
 def _nak_supplier_search(query):
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         r = requests.post(BITO_BASE_URL + "supplier/get-paging",
                           json={"page": 1, "limit": 6, "search": query or ""},
@@ -8794,7 +8778,7 @@ def nak_supplier_alias_forget(message):
     """🏢 Saqlangan firma mosliklarini ko'rsatadi — tugma bosib o'chiriladi.
     Noto'g'ri bog'lab qo'yilgan bo'lsa shu yerdan tuzatiladi: o'chirilgach
     keyingi nakladnoyda firma qayta so'raladi va yangi tanlov saqlanadi."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     rows = qall("SELECT alias_name, supplier_name FROM nak_supplier_aliases "
                 "ORDER BY updated_at DESC LIMIT 25")
@@ -8812,7 +8796,7 @@ def nak_supplier_alias_forget(message):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("supunut:"))
 def nak_supplier_alias_forget_cb(call):
-    if call.from_user.id != SUPER_ADMIN_ID:
+    if call.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     _ack(call)
     alias = call.data.split(":", 1)[1]
@@ -8875,7 +8859,7 @@ def nak_category_search_text(message):
     if message.text in MENU_TEXTS: return
     if get_role(uid) != 'boss':
         W_NAK_CAT.pop(uid, None); return
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         r = requests.post(BITO_BASE_URL + "category/get-paging",
                          json={"page": 1, "limit": 8, "search": message.text.strip()},
@@ -8941,7 +8925,7 @@ def _get_bito_sale_prices(product_ids, max_pages=65):
     if not product_ids:
         return {}
     price_id = tenant_setting("bito_sale_price_id", "694250a9c9b42022084696f6")  # "Sotuv Narx"
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     target = set(product_ids)
     found = {}
     candidates = [
@@ -9025,7 +9009,7 @@ def update_bito_sale_price(entry_id, product_id, new_amount, diag=None):
          o'zgartirmasligi mumkin (production'da prices hali yoqilmagan bo'lsa)."""
     if not product_id:
         return False, "Mahsulot Bito'da topilmagan — avval mahsulotni yaratish kerak"
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     price_id = tenant_setting("bito_sale_price_id", "694250a9c9b42022084696f6")
     amt = float(new_amount)
 
@@ -9043,9 +9027,9 @@ def update_bito_sale_price(entry_id, product_id, new_amount, diag=None):
 
     # 2-3) Mavjud qiymatlarni saqlab, narxni qo'shamiz
     orgs = []
-    for o in (p.get("organizations") or [{"organization_id": BITO_ORG_ID}]):
+    for o in (p.get("organizations") or [{"organization_id": CFG.BITO_ORG_ID}]):
         orgs.append({
-            "organization_id": o.get("organization_id") or BITO_ORG_ID,
+            "organization_id": o.get("organization_id") or CFG.BITO_ORG_ID,
             "is_available": bool(o.get("is_available", True)),
             "max_stock": o.get("max_stock") or 0,
             "yellow_line": o.get("yellow_line") or 0,
@@ -9117,7 +9101,7 @@ def update_bito_sale_price(entry_id, product_id, new_amount, diag=None):
         return True, ""
 
 def _nak_search_products(query, limit=6):
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         r = requests.post(BITO_BASE_URL + "product/get-paging",
                           json={"page": 1, "limit": limit, "search": query},
@@ -9135,7 +9119,7 @@ def _nak_search_products(query, limit=6):
             amt = None
             try:
                 for o in (p.get("organizations") or []):
-                    if o.get("organization_id") == BITO_ORG_ID:
+                    if o.get("organization_id") == CFG.BITO_ORG_ID:
                         amt = o.get("amount")
                         break
             except Exception:
@@ -10194,20 +10178,20 @@ def nak_text_edit(message):
 # hali yo'q mahsulotlar uchun (shtrix-kod bilan). Bito'da bu endpointning aniq
 # manzili hujjatlashtirilmagan — bir nechta ehtimoliy manzil sinaladi.
 # ══════════════════════════════════════════════════════════════════
-NAK_DEFAULT_UOM_ID = "693fea08ff2118868c955d27"  # "Dona" — standart o'lchov birligi
-NAK_DEFAULT_BOX_TYPE_ID = "69427e1ff461a9f6fd765b30"  # "Blok" — Bito'da tasdiqlangan (bito_box_type_get_all)
+# [tenant] CFG.NAK_DEFAULT_UOM_ID = "693fea08ff2118868c955d27"  # "Dona" — standart o'lchov birligi
+# [tenant] CFG.NAK_DEFAULT_BOX_TYPE_ID = "69427e1ff461a9f6fd765b30"  # "Blok" — Bito'da tasdiqlangan (bito_box_type_get_all)
 
 # 🔢 SKU (mahsulot raqami) — Bito'da ketma-ket boradi va BO'SH BO'LISHI MUMKIN EMAS
 # (aks holda: {"code":10001,"data":"sku"}). Bito o'z ilovasida uni avtomatik beradi,
 # lekin API orqali yaratganda biz o'zimiz hisoblab yuborishimiz kerak.
-NAK_SKU_STATE = {"next": None}
+NAK_SKU_STATE = TDict(template={"next": None})
 
 def _fetch_max_bito_sku():
     """Bito'dagi eng katta raqamli SKU'ni qaytaradi (topilmasa None).
     `sort=-sku` bilan yuqoridagi bir nechtasini olib, ular orasidan eng kattasini
     tanlaymiz — SKU matn sifatida saqlangani uchun saralash ba'zan harf tartibida
     bo'lishi mumkin, shuning uchun bittasiga emas, bir nechtasiga qaraymiz."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     best = 0
     try:
         r = requests.post(BITO_BASE_URL + "product/get-paging",
@@ -10318,10 +10302,10 @@ def find_bito_product_by_barcode(barcode):
     bc = (barcode or "").strip()
     if not bc:
         return None
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         r = requests.post(BITO_BASE_URL + "product/get-by-barcode",
-                          json={"barcode": bc, "organization_id": BITO_ORG_ID},
+                          json={"barcode": bc, "organization_id": CFG.BITO_ORG_ID},
                           headers=headers, timeout=20)
         if r.status_code == 200:
             d = (r.json() or {}).get("data") or {}
@@ -10367,7 +10351,7 @@ def create_bito_product(name, barcode=None, category_id=None, diag=None, measure
     if not category_id:
         return False, ("Kategoriya tanlanmagan. \"Chiroyli tahrirlash\"da kategoriya kiriting, "
                         "yoki ⚙️ Sozlamalar → 🆕 Yangi mahsulot kategoriyasi orqali standartini belgilang.")
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     # 🔎 AVVAL QIDIRAMIZ, keyin yaratamiz. Shtrix-kod allaqachon Bito'dagi biror
     # mahsulotga tegishli bo'lsa — dublikat yaratish o'rniga O'SHANI ishlatamiz
     # (aks holda Bito 26018 bilan rad etadi va qator xaridga umuman kirmaydi).
@@ -10390,7 +10374,7 @@ def create_bito_product(name, barcode=None, category_id=None, diag=None, measure
         "category_id": category_id,
         # 📏 Foydalanuvchi "Chiroyli tahrirlash"da tanlagan o'lchov birligi;
         # tanlanmagan bo'lsa — standart "Dona"
-        "measure_id": measure_id or NAK_DEFAULT_UOM_ID,
+        "measure_id": measure_id or CFG.NAK_DEFAULT_UOM_ID,
         "note": "",
         "box_item": 0,
         "sku": sku,
@@ -10410,7 +10394,7 @@ def create_bito_product(name, barcode=None, category_id=None, diag=None, measure
         # "organization_id" yuborilsa, "is_available" yo'qligidan shikoyat qiladi.
         # Quyidagi tuzilma Bito'dagi MAVJUD mahsulotdan (bito_product_get_paging) olingan.
         "organizations": [{
-            "organization_id": BITO_ORG_ID,
+            "organization_id": CFG.BITO_ORG_ID,
             "is_available": True,            # omborda hisobga olinsinmi
             "is_available_for_sale": True,   # sotuvga chiqsinmi
             "amount": 0,                     # boshlang'ich qoldiq (xarid keyin qo'shadi)
@@ -10539,7 +10523,7 @@ def _find_recent_bito_purchase(supplier_id, expected_total, upload_tag=None, max
          yoziladi — shunda AYNAN SHU yuklash aniqlanadi, avval yuklanib bekor
          qilingan bir xil nakladnoy bilan chalkashmaydi.
     Topilsa dict(number, total_cost), aks holda None."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         r = requests.post(BITO_BASE_URL + "purchase/get-paging",
                          json={"page": 1, "limit": 20, "sort": "-created_at"},
@@ -10591,7 +10575,7 @@ def create_bito_purchase(st, progress_cb=None):
     warehouse_id, currency_id, is_auto_income, orders[].products[].
     ⚠️ Shtrix-kod bilan belgilangan, lekin Bito'da mos topilmagan qatorlar uchun
     AVVAL yangi mahsulot yaratiladi, so'ng xaridga qo'shiladi."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     matches = [m for m in st.get("matches", []) if m.get("product_id")]
 
     # 🆕 Shtrix-kodi kiritilgan, lekin hali Bito'da topilmagan qatorlar — avval yaratamiz
@@ -10739,7 +10723,7 @@ def _send_one_purchase(headers, supplier_id, products, total, batch_no=1, n_batc
     upload_tag = "bot-" + _secrets.token_hex(4)
     suffix = f" ({batch_no}/{n_batches})" if n_batches > 1 else ""
     body = {
-        "organization_id": BITO_ORG_ID,
+        "organization_id": CFG.BITO_ORG_ID,
         "state": "new",
         "date": today_str(),
         "income_date": today_str(),
@@ -10853,7 +10837,7 @@ def voice_message_handler(message):
 # Foydalanish: /bitotest  (oxirgi 3 kun)  yoki  /bitotest 24.06.2026 26.06.2026
 @bot.message_handler(commands=['marketing'])
 def marketing_cmd(message):
-    if message.from_user.id != SUPER_ADMIN_ID and not is_boss_or_mgr(message.from_user.id):
+    if message.from_user.id != CFG.SUPER_ADMIN_ID and not is_boss_or_mgr(message.from_user.id):
         bot.send_message(message.chat.id, "⛔ Faqat boshliq uchun."); return
     if license_guard(message): return
     bot.send_message(message.chat.id, "⏳ Bito ma'lumotlari olinmoqda va Claude tahlil qilmoqda (30-60 soniya)...")
@@ -10949,7 +10933,7 @@ def start(message):
     # Aks holda /start ariza javobi sifatida saqlanib qolardi.
     if not txt.split(maxsplit=1)[1:] or not txt.split(maxsplit=1)[1].strip().startswith("job_"):
         W_APPLY.pop(tg_id, None)
-    if REVIEW_SECRET in txt:
+    if CFG.REVIEW_SECRET in txt:
         _start_review(message); return
     # 🧑‍💼 Vakansiyaga ariza: /start job_<id>
     parts = txt.split(maxsplit=1)
@@ -10963,7 +10947,7 @@ def start(message):
     u = get_user(tg_id)
     if u:
         role = u[2]
-        if tg_id == SUPER_ADMIN_ID and role != 'boss':
+        if tg_id == CFG.SUPER_ADMIN_ID and role != 'boss':
             q("UPDATE users SET role='boss' WHERE tg_id=?", (tg_id,))
             bot.send_message(tg_id, f"👑 Xush kelibsiz, *{u[1]}*!\nSiz *Boshliq* sifatida tasdiqlandi.", parse_mode="Markdown", reply_markup=boss_kb()); return
         if role == 'pending':
@@ -10972,7 +10956,7 @@ def start(message):
             bot.send_message(tg_id, "❌ Kirishingiz rad etildi."); return
         pos = f" | {u[3]}" if u[3] else ""
         bot.send_message(tg_id, f"👋 Xush kelibsiz, *{u[1]}*{pos}!", parse_mode="Markdown", reply_markup=get_kb(tg_id)); return
-    if tg_id == SUPER_ADMIN_ID:
+    if tg_id == CFG.SUPER_ADMIN_ID:
         W_REGISTER[tg_id] = 'boss'
         bot.send_message(tg_id, "👑 *Siz bosh admin!*\n\nIsm va familiyangizni yozing:", parse_mode="Markdown"); return
     W_REGISTER[tg_id] = 'user'
@@ -11159,7 +11143,7 @@ def handle_location(message):
     name = u[1]
     action = W_LOCATION.pop(tg_id, None)
     radius = int(get_setting("gps_radius","200"))
-    dist = calc_dist(message.location.latitude, message.location.longitude, SHOP_LAT, SHOP_LON)
+    dist = calc_dist(message.location.latitude, message.location.longitude, CFG.SHOP_LAT, CFG.SHOP_LON)
     if dist > radius:
         bot.send_message(tg_id, f"❌ *Do'kondan uzoqdasiz!*\n📍 {int(dist)} metr\n✅ Ruxsat: {radius} metr", parse_mode="Markdown", reply_markup=emp_kb())
         for (aid,) in qall("SELECT tg_id FROM users WHERE role IN ('boss','manager')"):
@@ -11620,7 +11604,7 @@ def fire_emp_ask(call):
     ko'rinmaydi, lekin davomat/oylik/savdo/baho TARIXI to'liq qoladi —
     ular alohida jadvallarda (attendance, sales, reviews, tasks) va
     tg_id+ism bo'yicha saqlangan, eski hisobotlarda ko'rinaveradi."""
-    if call.from_user.id != SUPER_ADMIN_ID and get_role(call.from_user.id) != 'boss':
+    if call.from_user.id != CFG.SUPER_ADMIN_ID and get_role(call.from_user.id) != 'boss':
         _ack(call, "Faqat rahbar bo'shata oladi")
         return
     _ack(call)
@@ -11641,7 +11625,7 @@ def fire_emp_ask(call):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("fireok_"))
 def fire_emp_do(call):
-    if call.from_user.id != SUPER_ADMIN_ID and get_role(call.from_user.id) != 'boss':
+    if call.from_user.id != CFG.SUPER_ADMIN_ID and get_role(call.from_user.id) != 'boss':
         return
     _ack(call)
     tg_id = int(call.data.replace("fireok_", ""))
@@ -11667,7 +11651,7 @@ def fire_emp_do(call):
 @bot.message_handler(commands=['boshatilganlar'])
 def fired_list(message):
     """📜 Bo'shatilganlar ro'yxati — qayta tiklash tugmalari bilan."""
-    if message.from_user.id != SUPER_ADMIN_ID and get_role(message.from_user.id) != 'boss':
+    if message.from_user.id != CFG.SUPER_ADMIN_ID and get_role(message.from_user.id) != 'boss':
         return
     rows = qall("SELECT tg_id, full_name, position FROM users "
                 "WHERE role='fired' ORDER BY full_name")
@@ -11686,7 +11670,7 @@ def fired_list(message):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("rehire_"))
 def rehire_emp(call):
-    if call.from_user.id != SUPER_ADMIN_ID and get_role(call.from_user.id) != 'boss':
+    if call.from_user.id != CFG.SUPER_ADMIN_ID and get_role(call.from_user.id) != 'boss':
         return
     _ack(call)
     tg_id = int(call.data.replace("rehire_", ""))
@@ -11703,7 +11687,7 @@ def rehire_emp(call):
         pass
 
 
-W_MODE_TOGGLE = {}  # boss_tg_id -> {"target_id": int, "selected": set(...)}
+W_MODE_TOGGLE = TDict()  # boss_tg_id -> {"target_id": int, "selected": set(...)}
 
 def _mode_toggle_markup(selected):
     markup = types.InlineKeyboardMarkup()
@@ -11819,7 +11803,7 @@ def weekday_clear(call):
     u = get_user(target_id)
     bot.send_message(call.message.chat.id, f"🗑 *{u[1]}* uchun *{WEEKDAY_NAMES[wd]}* jadvali tozalandi.", parse_mode="Markdown")
 
-W_WEEK_TIME = {}  # boss_tg_id -> {"emp_id":.., "weekday":.., "step":"checkin"/"checkout", "checkin":..}
+W_WEEK_TIME = TDict()  # boss_tg_id -> {"emp_id":.., "weekday":.., "step":"checkin"/"checkout", "checkin":..}
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("weeksettime_"))
 def weekday_settime_start(call):
@@ -12398,7 +12382,7 @@ def rev_qr(call):
     try:
         import qrcode
         bot_info = bot.get_me()
-        link = f"https://t.me/{bot_info.username}?start={REVIEW_SECRET}"
+        link = f"https://t.me/{bot_info.username}?start={CFG.REVIEW_SECRET}"
         qr = qrcode.QRCode(version=2, error_correction=qrcode.constants.ERROR_CORRECT_H, box_size=10, border=4)
         qr.add_data(link); qr.make(fit=True)
         img = qr.make_image(fill_color="black", back_color="white")
@@ -12407,15 +12391,15 @@ def rev_qr(call):
     except: bot.send_message(call.message.chat.id, "⚠️ qrcode kutubxonasi kerak.")
 
 # Savdo
-W_SAVDO_DATE = {}
+W_SAVDO_DATE = TDict()
 
 def bito_get_sales_summary(from_iso, to_iso):
     """Bito'dan berilgan davr uchun savdo xulosasini oladi."""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         r = requests.post(BITO_BASE_URL + "reports/dashboard/summary",
                          json={"from_date": from_iso, "to_date": to_iso,
-                               "organization_ids": [BITO_ORG_ID]},
+                               "organization_ids": [CFG.BITO_ORG_ID]},
                          headers=headers, timeout=30)
         r.raise_for_status()
         j = r.json()
@@ -12428,7 +12412,7 @@ def bito_get_sales_summary(from_iso, to_iso):
 def bito_get_sales_by_employee(from_iso, to_iso):
     """Bito'dan xodimlar bo'yicha savdoni oladi."""
     try:
-        headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+        headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
         r = requests.post(BITO_BASE_URL + "reports/dashboard/top/responsible",
                          json={"from_date": from_iso, "to_date": to_iso},
                          headers=headers, timeout=20)
@@ -12582,7 +12566,7 @@ def bsales_by_emp_report(call):
         df, dt_ = bito_range_utc(m_start, today_str())
     _send_emp_period_report(call.message.chat.id, target_id, df, dt_, label)
 
-W_EMP_SAVDO_DATE = {}
+W_EMP_SAVDO_DATE = TDict()
 
 @bot.message_handler(func=lambda m: m.from_user.id in W_EMP_SAVDO_DATE)
 def bsales_by_emp_custom_date(message):
@@ -12661,7 +12645,7 @@ def stalesale_pick_period(call):
     )
     bot.send_message(call.message.chat.id, "📅 Qaysi muddat uchun?", reply_markup=markup)
 
-W_STALE_EMP_DATE = {}
+W_STALE_EMP_DATE = TDict()
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("staleperiod_"))
 def stalesale_period_pick(call):
@@ -13424,8 +13408,7 @@ def bmap_cb(call):
         names = get_bito_employee_names()
         if not names:
             bot.send_message(call.message.chat.id, "⚠️ Bito'dan xodim topilmadi (oxirgi 1 yilda savdosi bo'lmagan yoki ulanishda xato)."); return
-        global BITO_NAME_CACHE
-        BITO_NAME_CACHE = names
+        BITO_NAME_CACHE["v"] = names
         markup = types.InlineKeyboardMarkup()
         for idx, name in enumerate(names):
             markup.add(types.InlineKeyboardButton(name, callback_data=f"bmap_set_{emp_id}_{idx}"))
@@ -13434,7 +13417,7 @@ def bmap_cb(call):
         try:
             emp_id_str, idx_str = data.replace("bmap_set_","").split("_")
             emp_id = int(emp_id_str); idx = int(idx_str)
-            bname = BITO_NAME_CACHE[idx]
+            bname = BITO_NAME_CACHE["v"][idx]
         except Exception:
             bot.send_message(call.message.chat.id, "⚠️ Eskirgan ro'yxat, qaytadan urinib ko'ring."); return
         q("INSERT OR REPLACE INTO bito_employee_map (tg_id,bito_name,created_at) VALUES (?,?,?)", (emp_id,bname,now_str()))
@@ -13442,7 +13425,7 @@ def bmap_cb(call):
         bot.send_message(call.message.chat.id, f"✅ Bog'landi: <b>{h(ename)}</b> ↔ Bito: <b>{h(bname)}</b>", parse_mode="HTML")
 
 # ===== OMBOR ESLATMASI BOSHQARUVI =====
-W_STOCK_SEARCH = {}  # tg_id -> "search" yoki ("min_qty", product_id, product_name)
+W_STOCK_SEARCH = TDict()  # tg_id -> "search" yoki ("min_qty", product_id, product_name)
 
 def _show_stock_menu(chat_id):
     rows = qall("SELECT product_id, product_name, min_qty FROM stock_alerts ORDER BY product_name")
@@ -13682,11 +13665,11 @@ print("✅ Bonus Market bot ishga tushdi...")
 def get_marketing_analysis():
     """✅ TUZATILGAN: Bito'dan ma'lumot olib, Claude AI orqali marketing tahlil qiladi."""
     try:
-        if not BITO_ORG_ID:
-            print("ERR: BITO_ORG_ID aniqlanmagan!", flush=True)
+        if not CFG.BITO_ORG_ID:
+            print("ERR: CFG.BITO_ORG_ID aniqlanmagan!", flush=True)
             return None
         
-        headers_bito = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+        headers_bito = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
         today = now_dt()
         month_start = today.replace(day=1).strftime("%Y-%m-%d")
         week_start = (today - timedelta(days=6)).strftime("%Y-%m-%d")
@@ -13695,7 +13678,7 @@ def get_marketing_analysis():
 
         # 1. Oylik top mahsulotlar
         r1 = requests.post(BITO_BASE_URL + "sales/by-item-pagin",
-            json={"page":1,"limit":20,"from_date":to_utc(month_start),"organization_ids":[BITO_ORG_ID]},
+            json={"page":1,"limit":20,"from_date":to_utc(month_start),"organization_ids":[CFG.BITO_ORG_ID]},
             headers=headers_bito, timeout=60)
         r1.raise_for_status()
         j1 = r1.json()
@@ -13806,7 +13789,7 @@ def marketing_thread():
             print("MARKETING THREAD ERR:", str(e)[:150], flush=True)
         time.sleep(30)
 
-threading.Thread(target=marketing_thread, daemon=True).start()
+_boot_thread(marketing_thread)
 
 # ══════════════════════════════════════════════════════════════════
 # 📱 MOBIL ILOVA UCHUN REST API (Telegram'siz ishlaydi)
@@ -13853,14 +13836,14 @@ INV_PAGE_LIMIT = 200                          # Bito maksimumi
 INV_MAX_PAGES = 60                            # 200×60 = 12 000 qator
 INV_COVER_DAYS = 90                           # qoldiq shuncha kunga yetsa — ortiqcha
 
-INV_CACHE = {"stock": None, "sold": None, "sum": None, "ts": 0}
+INV_CACHE = TDict(template={"stock": None, "sold": None, "sum": None, "ts": 0})
 
 
 def inv_post(path, body, timeout=40):
     """Bito'ga POST. Xatoda None."""
     try:
         r = requests.post(BITO_BASE_URL + path, json=body,
-                          headers={"api-key": BITO_API_KEY,
+                          headers={"api-key": CFG.BITO_API_KEY,
                                    "Content-Type": "application/json"},
                           timeout=timeout)
         r.raise_for_status()
@@ -13882,7 +13865,7 @@ def inv_fetch_stock():
 
     Server saralashni qo'llab-quvvatlamagani uchun hamma sahifa tortiladi.
     """
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     cands = ["reports/dashboard/summary/product/chart-pagin",
              "reports/dashboard/summary/product/chart-paging",
              "reports/dashboard/summary/product/pagin",
@@ -13893,7 +13876,7 @@ def inv_fetch_stock():
     while page <= INV_MAX_PAGES:
         j, _p = _bito_try_paths("bito_stockcost_endpoint", cands,
                                 {"page": page, "limit": INV_PAGE_LIMIT,
-                                 "organization_ids": [BITO_ORG_ID]},
+                                 "organization_ids": [CFG.BITO_ORG_ID]},
                                 headers, "INV STOCK")
         if j is None:
             break
@@ -13937,7 +13920,7 @@ def inv_fetch_sold(days=30):
     while page <= INV_MAX_PAGES:
         j = inv_post("sales/by-item-pagin",
                      {"page": page, "limit": 300, "from_date": frm,
-                      "to_date": to, "organization_ids": [BITO_ORG_ID]})
+                      "to_date": to, "organization_ids": [CFG.BITO_ORG_ID]})
         if j is None:
             break
         items = _bito_rows(j)
@@ -14123,14 +14106,14 @@ def inv_run(chat_id):
 @bot.message_handler(commands=['inventar'])
 def inv_cmd(message):
     """📦 Inventarizatsiya tahlili. Faqat O'QIYDI — hech narsa yozmaydi."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     inv_run(message.chat.id)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("inv:"))
 def inv_cb(call):
-    if call.from_user.id != SUPER_ADMIN_ID:
+    if call.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     _ack(call)
     chat_id = call.message.chat.id
@@ -14194,7 +14177,7 @@ def inv_cb(call):
 @bot.message_handler(commands=['inv_qidir'])
 def inv_search_cmd(message):
     """🔎 /inv_qidir <nom> — ombordan mahsulot qidirish."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     q = (message.text or "").replace("/inv_qidir", "", 1).strip().lower()
     if not q:
@@ -14233,13 +14216,13 @@ q("""CREATE TABLE IF NOT EXISTS inv_counts (
     counted REAL,           -- qo'lda sanalgan son
     counted_at TEXT)""")
 
-W_INV_COUNT = {}   # {uid: {"cands": [...], "pick": {...}}}
+W_INV_COUNT = TDict()   # {uid: {"cands": [...], "pick": {...}}}
 
 
 @bot.message_handler(commands=['sanash'])
 def inv_count_cmd(message):
     """✍️ /sanash <nom> — mahsulotni topib, sanalgan sonni yozish."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     chat_id = message.chat.id
     query = (message.text or "").replace("/sanash", "", 1).strip().lower()
@@ -14270,7 +14253,7 @@ def inv_count_cmd(message):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("invc:"))
 def inv_count_pick_cb(call):
-    if call.from_user.id != SUPER_ADMIN_ID:
+    if call.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     _ack(call)
     st = W_INV_COUNT.get(call.from_user.id)
@@ -14377,14 +14360,14 @@ def _inv_send_count_report(chat_id):
 
 @bot.message_handler(commands=['sanash_hisobot'])
 def inv_count_report(message):
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     _inv_send_count_report(message.chat.id)
 
 
 @bot.message_handler(commands=['sanash_tozalash'])
 def inv_count_clear(message):
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     n = qone("SELECT COUNT(*) FROM inv_counts")
     q("DELETE FROM inv_counts")
@@ -14408,7 +14391,7 @@ def inv_count_clear(message):
 # _bito_try_paths bilan sinaladi, natija loglarda va javobda ko'rinadi.
 # ──────────────────────────────────────────────────────────────────
 
-INV_WO_REASON_ID = "695ff2a1a354cd778ad58183"   # "Ulugbek" (write_off turi, faol)
+# [tenant] CFG.INV_WO_REASON_ID = "695ff2a1a354cd778ad58183"   # "Ulugbek" (write_off turi, faol)
 
 
 def inv_collect_diffs():
@@ -14447,7 +14430,7 @@ def bito_inv_writeoff(items):
     Tuzilish jonli o'qilgan №10063 hujjatdan olingan. Manzil noma'lum —
     variantlar sinaladi va ishlagani saqlanadi.
     """
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     products = []
     for i in items:
         row = {"product_id": i["id"], "amount": i["qty"]}
@@ -14456,7 +14439,7 @@ def bito_inv_writeoff(items):
             row["measure_id"] = mid
         products.append(row)
     body = {
-        "organization_id": BITO_ORG_ID,
+        "organization_id": CFG.BITO_ORG_ID,
         "warehouse_id": tenant_setting("bito_warehouse_id",
                                        "69424f36a3a3cc43da908320"),
         "source_warehouse_id": tenant_setting("bito_warehouse_id",
@@ -14466,7 +14449,7 @@ def bito_inv_writeoff(items):
         "currency_id": tenant_setting("bito_currency_id",
                                       "69424f34f461a9f6fd61972d"),
         "action": "remove",
-        "reason_id": INV_WO_REASON_ID,
+        "reason_id": CFG.INV_WO_REASON_ID,
         "state": "done",
         "write_date": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000Z"),
         "note": "Inventarizatsiya kamomadi — bot orqali",
@@ -14492,7 +14475,7 @@ def bito_inv_income(items):
     hisob aralashmasligi uchun. Topilmasa yozilmaydi va foydalanuvchiga
     Bito'da bir marta shunday firma ochish aytiladi (30 soniyalik ish).
     """
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     try:
         rs = requests.post(BITO_BASE_URL + "supplier/get-paging",
                            json={"page": 1, "limit": 3, "search": "Inventar"},
@@ -14510,7 +14493,7 @@ def bito_inv_income(items):
     products = [{"product_id": i["id"], "amount": i["qty"], "cost": i["cost"]}
                 for i in items]
     body = {
-        "organization_id": BITO_ORG_ID,
+        "organization_id": CFG.BITO_ORG_ID,
         "state": "new",
         "date": today_str(),
         "income_date": today_str(),
@@ -14609,7 +14592,7 @@ class _FakeMsg:
 
 @bot.message_handler(func=lambda m: m.text == "⚖️ PLU kodlar")
 def btn_plu(message):
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("📊 PLU hisobot (kimda bor/yo'q)",
@@ -14624,7 +14607,7 @@ def btn_plu(message):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("plum:"))
 def btn_plu_cb(call):
-    if call.from_user.id != SUPER_ADMIN_ID:
+    if call.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     _ack(call)
     fake = _FakeMsg(call.from_user.id, call.message.chat.id)
@@ -14637,7 +14620,7 @@ def btn_plu_cb(call):
 @bot.message_handler(func=lambda m: m.text == "📦 Inventarizatsiya")
 def btn_inventar(message):
     """📦 Menyu tugmasi — kichik menyu ochadi (buyruq yodlash shart emas)."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("📊 Tahlil (qotgan pul, soxta...)",
@@ -14667,7 +14650,7 @@ def btn_inventar(message):
 # (lokal qidiruv), nak_save_alias / nak_get_alias (xotira).
 # ──────────────────────────────────────────────────────────────────
 
-W_BOGLA = {}   # uid -> {"names":[...], "idx":0, "cands":[...], "step":...}
+W_BOGLA = TDict()   # uid -> {"names":[...], "idx":0, "cands":[...], "step":...}
 
 
 def _bogla_cands(name, limit=6):
@@ -14732,7 +14715,7 @@ def _bogla_allowed(uid):
     """Admin har doim; xodim — tugma unga yashirilmagan bo'lsa.
     (Tugma yashirilganda hidden_menu_guard baribir to'sadi, bu esa
     /bogla BUYRUG'I orqali aylanib o'tishning oldini oladi.)"""
-    if uid == SUPER_ADMIN_ID or get_role(uid) in ('boss', 'manager'):
+    if uid == CFG.SUPER_ADMIN_ID or get_role(uid) in ('boss', 'manager'):
         return True
     return (get_role(uid) == 'employee'
             and "🔗 Mahsulot bog'lash" not in get_hidden_menu("emp"))
@@ -14884,13 +14867,16 @@ q("""CREATE TABLE IF NOT EXISTS promo_posts (
     day TEXT, created_at TEXT)""")
 for _col in ("old_price REAL", "new_price REAL", "promo_until TEXT",
              "published_at TEXT", "created_by INTEGER"):
-    pass
+    pass  # ⚠️ o'lik sikl (tanasi bo'sh) — pastdagisi haqiqiy ishni qiladi
 q("""CREATE TABLE IF NOT EXISTS promo_schedule (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     row_id INTEGER, dest TEXT,            -- 'tg' / 'ig'
     when_at TEXT, status TEXT DEFAULT 'pending',  -- await/pending/done/cancelled/failed
     requested_by INTEGER, created_at TEXT)""")
-for _col in ("old_price REAL", "new_price REAL", "promo_until TEXT",
+for _col in ("kind TEXT DEFAULT 'sale'",   # 250-qatordagi ALTER bu jadvaldan
+                                           # OLDIN turadi — yangi bazada
+                                           # "no such table" bo'lardi
+             "old_price REAL", "new_price REAL", "promo_until TEXT",
              "published_at TEXT", "created_by INTEGER"):
     try:
         q(f"ALTER TABLE promo_posts ADD COLUMN {_col}")
@@ -14953,10 +14939,10 @@ def _promo_ai_post(p, avoid_text=None, plain=False):
 def _promo_allowed(uid):
     """Post oqimi kimga ochiq: super-admin, boshliq, menejer
     (2026-08-08: ertalabki xabar menejerga ham boradi)."""
-    return uid == SUPER_ADMIN_ID or is_boss_or_mgr(uid)
+    return uid == CFG.SUPER_ADMIN_ID or is_boss_or_mgr(uid)
 
 
-_INV_WARMING = {"on": False}
+_INV_WARMING = TDict(template={"on": False})
 
 
 def _promo_cost_price(product_id):
@@ -14977,7 +14963,7 @@ def _promo_cost_price(product_id):
         if rown:
             pname = rown[0]
         if pname:
-            headers = {"api-key": BITO_API_KEY,
+            headers = {"api-key": CFG.BITO_API_KEY,
                        "Content-Type": "application/json"}
             cands = ["reports/dashboard/summary/product/chart-pagin",
                      "reports/dashboard/summary/product/chart-paging",
@@ -14986,7 +14972,7 @@ def _promo_cost_price(product_id):
             j, _p = _bito_try_paths("bito_stockcost_endpoint", cands,
                                     {"page": 1, "limit": 20,
                                      "search": pname[:60],
-                                     "organization_ids": [BITO_ORG_ID]},
+                                     "organization_ids": [CFG.BITO_ORG_ID]},
                                     headers, "PROMO COST")
             for it in (_bito_rows(j) if j else []):
                 if isinstance(it, dict) and it.get("_id") == product_id                         and it.get("cost"):
@@ -15081,9 +15067,9 @@ def _promo_caption(name, old_price, new_price, until=None, plain=False):
                   if until else
                   "⏳ Shoshiling! Aksiya mahsuloti soni cheklangan.")]
     tail += ["",
-             f"📍 BONNU MARKET 🕗 Ish vaqti: {PROMO_HOURS}",
+             f"📍 BONNU MARKET 🕗 Ish vaqti: {CFG.PROMO_HOURS}",
              "🚚 Yetkazib berish xizmati mavjud",
-             f"📞 Buyurtma uchun: {PROMO_PHONE}",
+             f"📞 Buyurtma uchun: {CFG.PROMO_PHONE}",
              "📲 Telegram: @BonnuMarket",
              "💚 BONNU MARKET – Sifat va Ishonch!"]
     cap = head + "\n\n" + "\n".join(tail)
@@ -15159,11 +15145,15 @@ def _promo_poster_run(chat_id, uid, row_id):
 
 
 import os as _os
-PROMO_POSTER_DIR = _os.path.dirname(DB_PATH) or "."
+def PROMO_POSTER_DIR():
+    d = _os.path.join(_os.path.dirname(DB_PATH_FN()),
+                      "posters", TEN.current())
+    _os.makedirs(d, exist_ok=True)
+    return d
 
 
 def _promo_poster_path(row_id):
-    return _os.path.join(PROMO_POSTER_DIR, f"promo_poster_{row_id}.jpg")
+    return _os.path.join(PROMO_POSTER_DIR(), f"promo_poster_{row_id}.jpg")
 
 
 def _promo_channel():
@@ -15263,7 +15253,7 @@ def _send_post_preview(to_chat, row_id):
 
 def _tg_publish_request(uid, chat_id, row_id):
     """Telegram: admin — darhol; boshqalar — boshliqdan ruxsat."""
-    if uid == SUPER_ADMIN_ID:
+    if uid == CFG.SUPER_ADMIN_ID:
         err = _promo_publish(row_id, uid)
         bot.send_message(chat_id, err or
                          f"📢 Post {_promo_channel()} kanaliga joylandi!")
@@ -15280,17 +15270,17 @@ def _tg_publish_request(uid, chat_id, row_id):
                                       callback_data=f"ppub:no_{row_id}_{uid}"))
     try:
         ppath = _promo_poster_path(row_id)
-        bot.send_message(SUPER_ADMIN_ID,
+        bot.send_message(CFG.SUPER_ADMIN_ID,
                          f"🔐 <b>{h(who)}</b> post tayyorladi va "
                          f"{_promo_channel()} kanaliga joylashga ruxsat "
                          f"so'rayapti:", parse_mode="HTML")
         if _os.path.exists(ppath):
             with open(ppath, "rb") as f:
-                bot.send_photo(SUPER_ADMIN_ID, f,
+                bot.send_photo(CFG.SUPER_ADMIN_ID, f,
                                caption=(row[0] or "")[:1020],
                                reply_markup=kb)
         else:
-            bot.send_message(SUPER_ADMIN_ID, (row[0] or "")[:4000],
+            bot.send_message(CFG.SUPER_ADMIN_ID, (row[0] or "")[:4000],
                              reply_markup=kb)
         bot.send_message(chat_id, "🔐 Asosiy boshliqdan ruxsat so'raldi — "
                                   "javob kelgach xabar beraman.")
@@ -15300,7 +15290,7 @@ def _tg_publish_request(uid, chat_id, row_id):
 
 def _ig_publish_request(uid, chat_id, row_id):
     """Instagram: admin — darhol; boshqalar — ruxsat."""
-    if uid == SUPER_ADMIN_ID:
+    if uid == CFG.SUPER_ADMIN_ID:
         bot.send_message(chat_id, "📸 Instagram'ga yuborilmoqda...")
         def run():
             err = _promo_publish_ig(row_id, uid)
@@ -15315,8 +15305,8 @@ def _ig_publish_request(uid, chat_id, row_id):
            types.InlineKeyboardButton("❌ Rad etish",
                                       callback_data=f"pig:no_{row_id}_{uid}"))
     try:
-        _send_post_preview(SUPER_ADMIN_ID, row_id)
-        bot.send_message(SUPER_ADMIN_ID,
+        _send_post_preview(CFG.SUPER_ADMIN_ID, row_id)
+        bot.send_message(CFG.SUPER_ADMIN_ID,
                          f"🔐 <b>{h(who)}</b> YUQORIDAGI postni INSTAGRAM'ga "
                          f"joylashga ruxsat so'rayapti:",
                          parse_mode="HTML", reply_markup=kb)
@@ -15338,7 +15328,7 @@ def _promo_schedule(uid, chat_id, row_id, dest, when_dt):
     """Rejaga qo'yish: admin — to'g'ridan; boshqalar — boshliq ruxsati."""
     dname = "Telegram kanal" if dest == "tg" else "Instagram"
     ws = _sched_dt_str(when_dt)
-    if uid == SUPER_ADMIN_ID:
+    if uid == CFG.SUPER_ADMIN_ID:
         q("INSERT INTO promo_schedule (row_id,dest,when_at,status,"
           "requested_by,created_at) VALUES (?,?,?,?,?,?)",
           (row_id, dest, ws, "pending", uid, now_str()))
@@ -15357,8 +15347,8 @@ def _promo_schedule(uid, chat_id, row_id, dest, when_dt):
            types.InlineKeyboardButton("❌ Rad",
                                       callback_data=f"psch:no_{sid}"))
     try:
-        _send_post_preview(SUPER_ADMIN_ID, row_id)
-        bot.send_message(SUPER_ADMIN_ID,
+        _send_post_preview(CFG.SUPER_ADMIN_ID, row_id)
+        bot.send_message(CFG.SUPER_ADMIN_ID,
                          f"🔐 <b>{h(who)}</b> YUQORIDAGI postni "
                          f"{_sched_human(when_dt)} da {dname}ga joylashga "
                          f"ruxsat so'rayapti:",
@@ -15371,7 +15361,7 @@ def _promo_schedule(uid, chat_id, row_id, dest, when_dt):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("psch:"))
 def promo_sched_approve_cb(call):
-    if call.from_user.id != SUPER_ADMIN_ID:
+    if call.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     _ack(call)
     action, _, sid = call.data.replace("psch:", "").partition("_")
@@ -15459,7 +15449,7 @@ def promo_sched_cb(call):
     _promo_schedule(uid, chat_id, row_id, dest, when)
 
 
-W_PROMO_WHEN = {}
+W_PROMO_WHEN = TDict()
 
 
 @bot.message_handler(func=lambda m: m.from_user.id in W_PROMO_WHEN
@@ -15515,7 +15505,7 @@ def promo_sched_thread():
                       (sid,))
                 msg = (f"⏰ Rejali post: {dname} — "
                        + ("✅ joylandi!" if not err else f"❌ xato: {err}"))
-                for rid in {req_by, SUPER_ADMIN_ID}:
+                for rid in {req_by, CFG.SUPER_ADMIN_ID}:
                     try:
                         bot.send_message(rid, msg)
                     except Exception:
@@ -15544,7 +15534,7 @@ def promo_ig_cb(call):
         bot.send_message(chat_id, "📸 Instagram'ga qachon joylansin?",
                          reply_markup=kb)
     elif action in ("ok", "no"):
-        if uid != SUPER_ADMIN_ID:
+        if uid != CFG.SUPER_ADMIN_ID:
             return
         req_uid = int(parts[2]) if len(parts) > 2 else None
         if action == "ok":
@@ -15587,7 +15577,7 @@ def promo_publish_cb(call):
         bot.send_message(chat_id, "📢 Telegram kanalga qachon joylansin?",
                          reply_markup=kb)
     elif action in ("ok", "no"):
-        if uid != SUPER_ADMIN_ID:
+        if uid != CFG.SUPER_ADMIN_ID:
             return  # faqat asosiy boshliq tasdiqlaydi
         req_uid = int(parts[2]) if len(parts) > 2 else None
         if action == "ok":
@@ -15645,7 +15635,7 @@ def _promo_send_final(chat_id, uid, row_id):
         except Exception as e:
             print("POSTER SAVE ERR:", str(e)[:100], flush=True)
     kb = types.InlineKeyboardMarkup(row_width=1)
-    sfx = "" if uid == SUPER_ADMIN_ID else " (ruxsat so'raladi)"
+    sfx = "" if uid == CFG.SUPER_ADMIN_ID else " (ruxsat so'raladi)"
     kb.add(types.InlineKeyboardButton(f"📢 Telegram kanalga{sfx}",
                                       callback_data=f"ppub:req_{row_id}"),
            types.InlineKeyboardButton(f"📸 Instagram'ga{sfx}",
@@ -16030,9 +16020,9 @@ def promo_cmd(message):
                      parse_mode="HTML", reply_markup=kb)
 
 
-W_PROMO_SEARCH = {}   # uid -> {"cands": [...]} yoki {"await": True}
-W_PROMO_TIME = set()  # vaqt kiritishni kutayotganlar
-W_PROMO_CHAN = set()  # kanal kiritishni kutayotganlar
+W_PROMO_SEARCH = TDict()   # uid -> {"cands": [...]} yoki {"await": True}
+W_PROMO_TIME = TSet()  # vaqt kiritishni kutayotganlar
+W_PROMO_CHAN = TSet()  # kanal kiritishni kutayotganlar
 
 
 @bot.message_handler(func=lambda m: m.from_user.id in W_PROMO_CHAN
@@ -16095,7 +16085,7 @@ def promo_menu_cb(call):
         bot.send_message(chat_id, "⏰ Ertalabki xabar vaqtini yozing "
                                   "(masalan: 09:30). Bekor: /bekor")
     elif action == "chan":
-        if uid != SUPER_ADMIN_ID:
+        if uid != CFG.SUPER_ADMIN_ID:
             bot.send_message(chat_id, "Kanalni faqat asosiy boshliq "
                                       "o'zgartiradi.")
             return
@@ -16179,7 +16169,7 @@ def promo_daily_thread():
                     set_setting("promo_notify_day", today)
                     dead = _promo_dead_list()
                     if dead:
-                        recips = {SUPER_ADMIN_ID} | {
+                        recips = {CFG.SUPER_ADMIN_ID} | {
                             r[0] for r in qall(
                                 "SELECT tg_id FROM users WHERE role IN "
                                 "('boss','manager')") if r and r[0]}
@@ -16212,7 +16202,7 @@ def promo_daily_thread():
 # foydalanuvchi o'z rasmini yuklash yo'li har doim ochiq.
 # ──────────────────────────────────────────────────────────────────
 
-W_PROMO_IMG = {}   # uid -> {"row_id", "urls": [...], "step": "pick"/"await_upload"}
+W_PROMO_IMG = TDict()   # uid -> {"row_id", "urls": [...], "step": "pick"/"await_upload"}
 
 _DDG_UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                          "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -16302,7 +16292,7 @@ def _bito_product_images(product_id, limit=3):
     if not product_id:
         return []
     try:
-        headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+        headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
         r = requests.get(BITO_BASE_URL + f"product/get-by-id/{product_id}",
                          headers=headers, timeout=20)
         if r.status_code != 200:
@@ -16337,7 +16327,7 @@ def _bito_product_images(product_id, limit=3):
         api_root + "/static", api_root,
         "https://api.bito.online/integration-api",
         "https://api.bito.online"]
-    hdr_opts = [None, {"api-key": BITO_API_KEY}]
+    hdr_opts = [None, {"api-key": CFG.BITO_API_KEY}]
     out = []
     working = None
     for path in paths:
@@ -16637,14 +16627,14 @@ q("""CREATE TABLE IF NOT EXISTS zarur_items (
     baseline_stock REAL,           -- NULL = hali kuzatilmagan
     created_at TEXT)""")
 
-W_ZARUR = {}   # uid -> {"step", "name", "product_id", "stars", "cands"}
+W_ZARUR = TDict()   # uid -> {"step", "name", "product_id", "stars", "cands"}
 
 ZARUR_EXP_CHOICES = [("bugun", "Bugun"), ("ertaga", "Ertaga"),
                      ("hafta", "Shu hafta"), ("nomalum", "Noma'lum")]
 
 
 def _zarur_allowed(uid):
-    return (uid == SUPER_ADMIN_ID
+    return (uid == CFG.SUPER_ADMIN_ID
             or get_role(uid) in ('boss', 'manager', 'employee'))
 
 
@@ -16731,7 +16721,7 @@ def zarur_cb(call):
         kb = types.InlineKeyboardMarkup(row_width=1)
         for rid, name, added_by in rows:
             # Xodim faqat o'zinikini o'chiradi, admin/rahbar hammasini
-            if (uid == SUPER_ADMIN_ID or get_role(uid) in ('boss', 'manager')
+            if (uid == CFG.SUPER_ADMIN_ID or get_role(uid) in ('boss', 'manager')
                     or added_by == uid):
                 kb.add(types.InlineKeyboardButton(f"🗑 {name[:45]}",
                                                   callback_data=f"zr:delc_{rid}"))
@@ -16743,7 +16733,7 @@ def zarur_cb(call):
         row = qone("SELECT name, added_by FROM zarur_items WHERE id=?", (rid,))
         if not row:
             return
-        if not (uid == SUPER_ADMIN_ID or get_role(uid) in ('boss', 'manager')
+        if not (uid == CFG.SUPER_ADMIN_ID or get_role(uid) in ('boss', 'manager')
                 or row[1] == uid):
             return
         q("DELETE FROM zarur_items WHERE id=?", (rid,))
@@ -16848,9 +16838,9 @@ def _zarur_save(uid, chat_id, expected):
                      + "\n".join(h(n) for n in names)
                      + "\n\nYana biron narsa qo'shasizmi?",
                      parse_mode="HTML", reply_markup=kb)
-    if uid != SUPER_ADMIN_ID:
+    if uid != CFG.SUPER_ADMIN_ID:
         try:
-            bot.send_message(SUPER_ADMIN_ID,
+            bot.send_message(CFG.SUPER_ADMIN_ID,
                              f"🛒 {h(who)} zarur ro'yxatiga {len(items)} ta "
                              f"qo'shdi {'⭐' * stars}:\n"
                              + "\n".join(h(n) for n in names),
@@ -16925,7 +16915,7 @@ def zarur_watch_thread():
                         msg = (f"✅ 🛒 <b>{h(name)}</b> keldi "
                                f"({base:g} → {cur:g}) — zarur ro'yxatidan "
                                f"o'chirildi.")
-                        for to in {SUPER_ADMIN_ID, added_by or SUPER_ADMIN_ID}:
+                        for to in {CFG.SUPER_ADMIN_ID, added_by or CFG.SUPER_ADMIN_ID}:
                             try:
                                 bot.send_message(to, msg, parse_mode="HTML")
                             except Exception:
@@ -16944,8 +16934,8 @@ def zarur_watch_thread():
 # raqam chizdirmaymiz (buzadi), go'zallik ChatGPT'dan, aniqlik dasturdan.
 # ──────────────────────────────────────────────────────────────────
 
-PROMO_PHONE = "+998 93 777 70 27"
-PROMO_HOURS = "08:00–03:00"
+# [tenant] CFG.PROMO_PHONE = "+998 93 777 70 27"
+# [tenant] CFG.PROMO_HOURS = "08:00–03:00"
 _PB = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 _PR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
@@ -16960,7 +16950,7 @@ def _promo_sale_price(product_id):
     get-by-id → organizations[].prices yo'li qoldi."""
     if not product_id:
         return None
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     price_id = tenant_setting("bito_sale_price_id", "694250a9c9b42022084696f6")
 
     # 1) Asosiy yo'l: narx-ro'yxati elementlari. Aniq REST yo'li hujjatsiz —
@@ -17017,7 +17007,7 @@ def _promo_sale_price(product_id):
         if r.status_code == 200:
             p = (r.json() or {}).get("data") or {}
             for org in (p.get("organizations") or []):
-                if org.get("organization_id") != BITO_ORG_ID:
+                if org.get("organization_id") != CFG.BITO_ORG_ID:
                     continue
                 for pr in (org.get("prices") or []):
                     if pr.get("price_id") == price_id and pr.get("amount"):
@@ -17109,10 +17099,10 @@ def promo_compose_scene(scene_bytes, old_price, new_price, ribbon="AKSIYA!"):
     # 3) Aloqa paneli — eng pastda
     d.rectangle((0, H - bar_h, W, H), fill=GREEN_D)
     d.text((W//2, H - bar_h + int(14*S)),
-           f"BONNU MARKET  ·  {PROMO_PHONE}",
+           f"BONNU MARKET  ·  {CFG.PROMO_PHONE}",
            font=F(34), fill=WHITE, anchor="ma")
     d.text((W//2, H - bar_h + int(66*S)),
-           f"Ish vaqti {PROMO_HOURS}  ·  Yetkazib berish bor",
+           f"Ish vaqti {CFG.PROMO_HOURS}  ·  Yetkazib berish bor",
            font=F(24, False), fill=YELLOW, anchor="ma")
 
     out = io.BytesIO()
@@ -17235,7 +17225,7 @@ def _promo_scene_finish(chat_id, st, old_price, new_price):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("pdisc:"))
 def promo_disc_cb(call):
-    if call.from_user.id != SUPER_ADMIN_ID:
+    if call.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     _ack(call)
     uid, chat_id = call.from_user.id, call.message.chat.id
@@ -17263,7 +17253,7 @@ def promo_disc_cb(call):
 # gemini-2.5-flash-image (rasm chiqarish uchun responseModalities shart).
 # ──────────────────────────────────────────────────────────────────
 
-W_RASM_TEST = set()   # sinovda rasm kutayotgan adminlar
+W_RASM_TEST = TSet()   # sinovda rasm kutayotgan adminlar
 
 GEMINI_IMG_MODEL = "gemini-2.5-flash-image"
 GEMINI_IMG_PROMPT = (
@@ -17443,8 +17433,8 @@ def openai_make_promo_poster(image_bytes, product_name, old_price,
         f"matching icon in a circle):\n{ben_lines}"
         f"{price_block}"
         '- Bottom brand bar across full width (dark green): white bold '
-        '"BONNU MARKET", phone "' + PROMO_PHONE + '", and smaller yellow '
-        'text "Ish vaqti ' + PROMO_HOURS + '  ·  Yetkazib berish bor  ·  '
+        '"BONNU MARKET", phone "' + CFG.PROMO_PHONE + '", and smaller yellow '
+        'text "Ish vaqti ' + CFG.PROMO_HOURS + '  ·  Yetkazib berish bor  ·  '
         '@bonnumarket".\n'
         "Do NOT add any other text, prices, logos or watermarks.")
     try:
@@ -17498,7 +17488,7 @@ def ai_make_poster(image_bytes, mime="image/jpeg"):
 @bot.message_handler(commands=['rasm_test'])
 def rasm_test_cmd(message):
     """🧪 Gemini poster sinovi: rasm yuborasiz — poster qaytadi."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     if not GEMINI_API_KEY:
         bot.send_message(message.chat.id,
@@ -17608,11 +17598,11 @@ def photo_fallthrough_diag(message):
 
 
 # PROMO_THREAD_START — funksiya endi aniqlangan, ishga tushiramiz
-threading.Thread(target=promo_daily_thread, daemon=True).start()
-threading.Thread(target=zakaz_limit_thread, daemon=True).start()
-threading.Thread(target=task_overdue_thread, daemon=True).start()
-threading.Thread(target=promo_sched_thread, daemon=True).start()
-threading.Thread(target=zarur_watch_thread, daemon=True).start()
+_boot_thread(promo_daily_thread)
+_boot_thread(zakaz_limit_thread)
+_boot_thread(task_overdue_thread)
+_boot_thread(promo_sched_thread)
+_boot_thread(zarur_watch_thread)
 
 
 api = Flask(__name__)
@@ -18584,71 +18574,8 @@ function submitData(doUpload) {
     resp.headers["Expires"] = "0"
     return resp
 
-@api.route("/admin/db-import", methods=["POST"])
-def admin_db_import():
-    """🗄 BIR MARTALIK: eski servisdan bazani qabul qiladi.
-
-    ⚠️ Bu nuqta bazani BUTUNLAY almashtiradi, shuning uchun:
-      • DB_IMPORT_TOKEN muhit o'zgaruvchisi qo'yilmagan bo'lsa — YOPIQ
-      • token mos kelmasa — 403
-      • kelgan fayl haqiqiy SQLite ekani va kerakli jadvallari borligi tekshiriladi
-      • ko'chirish tugagach DB_IMPORT_TOKEN ni O'CHIRIB TASHLANG
-    """
-    token = os.getenv("DB_IMPORT_TOKEN", "")
-    if not token:
-        return jsonify({"ok": False, "error": "import yopiq"}), 404
-    if request.headers.get("X-Import-Token", "") != token:
-        return jsonify({"ok": False, "error": "token mos emas"}), 403
-
-    data = request.get_data() or b""
-    if len(data) < 100 or not data.startswith(b"SQLite format 3\x00"):
-        return jsonify({"ok": False, "error": f"SQLite fayl emas ({len(data)} bayt)"}), 400
-
-    tmp = DB_PATH + ".incoming"
-    try:
-        with open(tmp, "wb") as fh:
-            fh.write(data)
-        # Haqiqatan ochiladimi va kerakli jadvallar bormi?
-        chk = sqlite3.connect(tmp)
-        names = {r[0] for r in chk.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'")}
-        counts = {}
-        for t in ("users", "settings"):
-            if t in names:
-                counts[t] = chk.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-        chk.close()
-        if "users" not in names or "settings" not in names:
-            os.remove(tmp)
-            return jsonify({"ok": False,
-                            "error": f"kerakli jadvallar yo'q. Topilgani: {sorted(names)[:10]}"}), 400
-    except Exception as e:
-        try: os.remove(tmp)
-        except Exception: pass
-        return jsonify({"ok": False, "error": f"tekshiruvda xato: {str(e)[:120]}"}), 400
-
-    # Eski faylni zaxiraga olib, yangisini o'rniga qo'yamiz
-    try:
-        with _db_lock:
-            try:
-                db.close()
-            except Exception:
-                pass
-            if os.path.exists(DB_PATH):
-                os.replace(DB_PATH, DB_PATH + ".old")
-            for suf in ("-wal", "-shm"):
-                p = DB_PATH + suf
-                if os.path.exists(p):
-                    os.remove(p)
-            os.replace(tmp, DB_PATH)
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"almashtirishda xato: {str(e)[:120]}"}), 500
-
-    print(f"🗄 DB IMPORT: {len(data)} bayt qabul qilindi, jadvallar={len(names)}, "
-          f"{counts} — qayta ishga tushirilmoqda", flush=True)
-    # Ulanish yopildi, shuning uchun jarayonni tugatamiz — Railway qayta ko'taradi
-    threading.Timer(1.5, lambda: os._exit(0)).start()
-    return jsonify({"ok": True, "bytes": len(data), "tables": len(names),
-                    "counts": counts, "note": "servis qayta ishga tushmoqda"}), 200
+# ⛔️ /admin/db-import multi-tenantda xavfli edi (butun bazani almashtirardi) — o'chirildi.
+# Kerak bo'lsa tenantga bog'langan holda qayta yoziladi.
 
 
 def _webapp_user_ok(uid_param, token_param, token_check):
@@ -19467,7 +19394,7 @@ def _nak_price_item(product_id, product_name):
     `_get_bito_sale_prices` esa butun ro'yxatni sahifalab o'qiydi — sahifa uchun juda sekin."""
     if not product_id or not product_name:
         return None, ""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     price_id = tenant_setting("bito_sale_price_id", "694250a9c9b42022084696f6")
     body = {"price_id": price_id, "page": 1, "limit": 50, "search": str(product_name)[:60]}
     cached = tenant_setting("bito_price_items_path", "")
@@ -19815,7 +19742,7 @@ def dashboard_logout():
 #   • sahifalar telefonda keshlanadi (uzilsa ham ochiladi)
 #   • yuborilmagan ma'lumot navbatda turadi va aloqa tiklanganda ketadi
 
-APP_NAME = "Bonnu Market"
+# [tenant] CFG.APP_NAME = "Bonnu Market"
 
 
 @api.route("/", methods=["GET"])
@@ -20023,7 +19950,7 @@ def app_maqsad_daily_mark(did, ok):
     return jsonify({"ok": True}), 200
 
 
-NAK_MATCH_STATE = {}
+NAK_MATCH_STATE = TDict()
 
 
 def _run_nak_match(uid):
@@ -20640,7 +20567,7 @@ def app_manifest():
     """Telefon ilovani 'o'rnatiladigan' deb tanishi uchun."""
     import json as _json
     m = {
-        "name": APP_NAME, "short_name": APP_NAME,
+        "name": CFG.APP_NAME, "short_name": CFG.APP_NAME,
         "start_url": "/app", "scope": "/app",
         "display": "standalone", "orientation": "portrait",
         "background_color": "#ffffff", "theme_color": "#2481cc",
@@ -21133,7 +21060,7 @@ if ("serviceWorker" in navigator) {
 }
 </script>
 </body></html>"""
-    html = html.replace("__APP_NAME__", APP_NAME)
+    html = html.replace("__APP_NAME__", CFG.APP_NAME)
     html = html.replace("__WHO__", h(u[1] or "Boshqaruv paneli"))
     resp = make_response(html)
     resp.headers["Content-Type"] = "text/html; charset=utf-8"
@@ -21309,7 +21236,7 @@ def dashboard_refresh_advice():
 #   purchase/get-paging          → organization_id, currency_id, responsible_id
 #   product-warehouse/get-paging → warehouse_id
 #   product/get-paging           → o'lchov birliklari, Kilogram id, narx ro'yxati id
-_TENANT_WARNED = set()
+_TENANT_WARNED = TSet()
 
 
 def tenant_setting(key, bonnu_default=""):
@@ -21375,7 +21302,7 @@ def bito_autodetect_config():
 
     Faqat BO'SH sozlamalar to'ldiriladi — qo'lda kiritilganiga tegilmaydi.
     Qaytaradi: {kalit: (qiymat, manba)}"""
-    headers = {"api-key": BITO_API_KEY, "Content-Type": "application/json"}
+    headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
     found = {}
 
     def remember(key, val, src):
@@ -21473,32 +21400,17 @@ def bito_autodetect_config():
     return found
 
 
-def _apply_tenant_globals():
-    """Aniqlangan ID'larni modul o'zgaruvchilariga qo'llaydi.
 
-    ⚠️ BITO_ORG_ID, PLU_FIELD_ID kabilar fayl yuklanayotganda hisoblanadi —
-    o'shanda baza hali o'qilmagan bo'ladi. Shuning uchun sozlamalar
-    aniqlangandan keyin ularni bir marta yangilaymiz. Muhit o'zgaruvchisi
-    ANIQ berilgan bo'lsa — unga tegilmaydi, u ustunroq."""
-    global BITO_ORG_ID, PLU_FIELD_ID, KG_MEASURE_ID, NAK_DEFAULT_UOM_ID
-    pairs = [("BITO_ORG_ID", "BITO_ORG_ID", "bito_org_id"),
-             ("PLU_FIELD_ID", "BITO_PLU_FIELD_ID", "bito_plu_field_id"),
-             ("KG_MEASURE_ID", "BITO_KG_MEASURE_ID", "bito_kg_measure_id"),
-             ("NAK_DEFAULT_UOM_ID", "BITO_DEFAULT_UOM_ID", "bito_default_uom_id")]
-    for gname, envname, skey in pairs:
-        if os.getenv(envname):
-            continue  # muhit o'zgaruvchisi ustun
-        val = get_setting(skey, "")
-        if val and val != globals().get(gname):
-            globals()[gname] = val
-            print(f"🏪 TENANT: {gname} → {val}", flush=True)
+def _apply_tenant_globals():
+    """Eskirgan — sozlamalar endi markaziy bazadan (CFG) olinadi."""
+    return None
 
 
 @bot.message_handler(commands=['sozlama'])
 def tenant_config_cmd(message):
     """🏪 Shu deploy qaysi Bito hisobiga ulanganini ko'rsatadi.
     Yangi mijozga o'rnatgandan keyin BIRINCHI tekshiriladigan narsa."""
-    if message.from_user.id != SUPER_ADMIN_ID:
+    if message.from_user.id != CFG.SUPER_ADMIN_ID:
         return
     chat_id = message.chat.id
 
@@ -21589,7 +21501,7 @@ def _build_banner():
 
 _build_banner()
 
-threading.Thread(target=run_api_server, daemon=True).start()
+_boot_thread(run_api_server)
 
 # 🏪 Tenant sozlamalarini ishga tushishda aniqlaymiz. Fon rejimida —
 # botning ishga tushishini kechiktirmasligi uchun.
@@ -21599,12 +21511,47 @@ def _tenant_boot():
         bito_autodetect_config()
     except Exception as e:
         print("TENANT AUTODETECT ERR:", str(e)[:200], flush=True)
-threading.Thread(target=_tenant_boot, daemon=True).start()
+_boot_thread(_tenant_boot)
 # ══════════════════════════════════════════════════════════════════
 
-while True:
+
+# ══════════ 🏢 ISHGA TUSHISH — tenant sxemasi, oqimlar, polling ══════════
+
+def _start_boot_threads():
+    """Kechiktirilgan fon oqimlarini ishga tushiradi.
+
+    1-bosqichda har bir oqim STANDART tenant kontekstida ishlaydi — ya'ni
+    hozirgi xatti-harakat aynan saqlanadi. 5-bosqichda ular bitta
+    rejalashtiruvchi orqali barcha tenantlar bo'ylab aylanadigan bo'ladi
+    (18 oqim × 50 biznes = 900 thread bo'lib ketmasligi uchun).
+    """
+    for fn, name, module, every in _BOOT_THREADS:
+        threading.Thread(target=TEN.in_ctx(TEN.DEFAULT_TENANT, fn),
+                         name=name, daemon=True).start()
+    print(f"🧵 {len(_BOOT_THREADS)} ta fon oqimi ishga tushdi", flush=True)
+
+
+def main():
+    TEN.stop_recording()                 # sxema yig'ib bo'lindi
+    TEN.set_deny_sender(                 # yopiq modul haqida xabar
+        lambda cid, txt: bot.send_message(cid, txt, parse_mode="HTML"))
+    TEN.attach_tenant_routing(bot)       # har update o'z biznesiga
+    _start_boot_threads()
+
+    # Litsenziya boti (ADMIN_BOT_TOKEN berilgan bo'lsa) shu jarayonda
     try:
-        bot.infinity_polling(timeout=20, long_polling_timeout=20)
+        from admin_bot import start_admin_bot
+        start_admin_bot()
     except Exception as e:
-        print("POLLING CRASH:", str(e)[:300], flush=True)
-        time.sleep(5)
+        print("ADMIN BOT ERR:", str(e)[:200], flush=True)
+
+    while True:
+        try:
+            bot.infinity_polling(timeout=20, long_polling_timeout=20)
+        except Exception as e:
+            print("POLLING CRASH:", str(e)[:300], flush=True)
+            time.sleep(5)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,14 +1,21 @@
 # `saas/` — Multi-tenant yadro va litsenziya boti
 
 Bu papka AIMARKETNM_BOT ni **bitta do'kon** botidan **ko'p biznesga sotiladigan**
-mahsulotga aylantiruvchi qismi. `bot.py` ga hozircha **tegilmagan** — bu qatlam
-mustaqil ishlaydi va sinovdan o'tgan.
+mahsulotga aylantiruvchi qismi.
+
+`bot.py` endi shu qatlam ustida ishlaydi: `q()/qone()/qall()` joriy biznesning
+SQLite fayliga yo'naltiriladi, `W_*` lug'atlari va keshlar tenant bo'yicha
+ajratiladi, `SUPER_ADMIN_ID`/`BITO_API_KEY` kabi 200+ murojaat `CFG` orqali
+markaziy bazadan olinadi. **Chaqiruv joylari (384 ta SQL) o'zgarmagan.**
+
+⚠️ Python **3.12+** kerak (bot.py da PEP 701 f-string sintaksisi ishlatilgan).
 
 | Fayl | Vazifasi |
 |---|---|
 | `central.py` | Markaziy registr: bizneslar, modullar, litsenziya, to'lov, havolalar |
 | `admin_bot.py` | Litsenziya boti (faqat platforma egasi uchun) |
 | `migrate_bonnu.py` | Mavjud `market.db` ni birinchi tenantga aylantirish |
+| `tenant.py` | `bot.py` uchun tenant yadrosi: DB yo'naltirish, `TDict`/`TSet`, `CFG`, `@needs` |
 
 ---
 
@@ -120,8 +127,10 @@ C.tenant_db_path(t["slug"])          # shu biznesning SQLite fayli
 - [x] Markaziy registr (`central.py`) — sinovdan o'tgan
 - [x] Litsenziya boti (`admin_bot.py`) — barcha oqimlar sinovdan o'tgan
 - [x] Migratsiya skripti — sinovdan o'tgan
-- [ ] `bot.py` tenant yadrosi (DB yo'naltirish, `TDict`, `CFG`)
-- [ ] Deep-link ro'yxatdan o'tish `bot.py` ichida
-- [ ] Modul gating (menyu + `@needs` dekorator)
+- [x] `bot.py` tenant yadrosi (`tenant.py`: DB yo'naltirish, `TDict`/`TSet`, `CFG`)
+- [x] Har update o'z biznesining kontekstida (`attach_tenant_routing`)
+- [x] Yangi tenantga sxema avtomatik ko'chadi (67 ta DDL yozib olinadi)
+- [ ] Deep-link ro'yxatdan o'tish `bot.py` ichida (telefon bilan tasdiqlash)
+- [ ] Modul gating (menyu filtri + `@needs` dekoratorini handlerlarga qo'yish)
 - [ ] Fon oqimlari uchun bitta rejalashtiruvchi
 - [ ] Telegram xabar navbati (throttling)

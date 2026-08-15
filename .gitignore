@@ -28,3 +28,6 @@ venv/
 *.log
 *.tmp
 .DS_Store
+
+# Tenant posterlari
+posters/
