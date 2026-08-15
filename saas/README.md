@@ -23,7 +23,7 @@ markaziy bazadan olinadi. **Chaqiruv joylari (384 ta SQL) o'zgarmagan.**
 
 | O'zgaruvchi | Majburiy | Nima |
 |---|---|---|
-| `ADMIN_BOT_TOKEN` | ha | Litsenziya botining tokeni (@BotFather) |
+| `ADMIN_BOT_TOKEN` | ha | Litsenziya botining tokeni — **@BMPAINM_BOT** |
 | `SAAS_OWNER_ID` | ha | Sizning Telegram ID'ingiz — botga faqat siz kira olasiz |
 | `MASTER_KEY` | **ha** | Bito API kalitlari shu bilan shifrlanadi. Berilmasa avtomatik yaratiladi va `.master_key` fayliga yoziladi — **uni Railway Variables'ga ko'chiring**, aks holda volume yo'qolsa barcha Bito kalitlari o'qib bo'lmas holga keladi |
 | `MAIN_BOT_USERNAME` | yo'q | Standart: `AIMARKETNM_BOT` — havolalar shu nom bilan yasaladi |
@@ -32,6 +32,8 @@ markaziy bazadan olinadi. **Chaqiruv joylari (384 ta SQL) o'zgarmagan.**
 | `TRIAL_DAYS` | yo'q | Standart 14 |
 | `GRACE_DAYS` | yo'q | Standart 3 |
 | `AI_DAILY_LIMIT` | yo'q | Standart 300 — tenantga kunlik AI chaqiruv limiti |
+| `DEFAULT_TENANT` | yo'q | Standart `bonnu` — kontekst aniqlanmasa ishlatiladi |
+| `TENANT_STRICT` | yo'q | `1` bo'lsa kontekstsiz DB murojaatlarini loglaydi (debug) |
 
 `MASTER_KEY` yaratish:
 
@@ -53,12 +55,17 @@ python3 saas/central.py
 ADMIN_BOT_TOKEN=... SAAS_OWNER_ID=... python3 saas/admin_bot.py
 ```
 
-Asosiy bot bilan **bitta jarayonda** ishlatish uchun `bot.py` oxiriga:
+Asosiy bot bilan **bitta jarayonda** ishlash allaqachon ulangan — `bot.py`
+dagi `main()` `ADMIN_BOT_TOKEN` berilgan bo'lsa litsenziya botini avtomatik
+ishga tushiradi:
 
-```python
-from saas.admin_bot import start_admin_bot
-start_admin_bot()          # o'z threadida polling qiladi
+```bash
+python3 bot.py     # asosiy bot + litsenziya boti bitta jarayonda
 ```
+
+⚠️ Migratsiyadan keyin `SUPER_ADMIN_ID`, `BITO_API_KEY`, `BITO_ORG_ID`,
+`REVIEW_SECRET` muhit o'zgaruvchilarini **o'chiring** — aks holda ular barcha
+bizneslarga bir xil qo'llanadi (`.env.example` ga qarang).
 
 ---
 
