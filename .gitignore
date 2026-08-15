@@ -4,6 +4,12 @@
 *.ghtoken
 .ghtoken
 
+# Shifrlash kaliti — Bito API kalitlari shu bilan ochiladi
+.master_key
+
+# Tenant bazalari
+tenants/
+
 # Baza fayllari (Railway volume'da turadi)
 *.db
 *.sqlite
@@ -22,3 +28,6 @@ venv/
 *.log
 *.tmp
 .DS_Store
+
+# Tenant posterlari
+posters/
