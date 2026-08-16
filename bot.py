@@ -6848,7 +6848,7 @@ def ai_agent_answer(tg_id, chat_id, question, max_iters=5):
     """Claude'ga savol + asboblar beriladi; u kerak bo'lsa ma'lumot olib, yakuniy javob yozadi."""
     role = get_role(tg_id)
     role_desc = "boshliq/menejer" if role in ("boss", "manager") else "oddiy xodim"
-    system = (f"Sen O'zbekistondagi supermarket ({get_setting('shop_name','Bonus Market')}) "
+    system = (f"Sen O'zbekistondagi supermarket ({get_setting('shop_name', CFG.SHOP_NAME)}) "
               f"boshqaruv botining aqlli yordamchisisan. Foydalanuvchi — {role_desc}. "
               f"Bugungi sana: {today_str()}. Savolga javob berishdan oldin kerakli asboblardan "
               f"foydalanib REAL ma'lumotlarni ol — taxmin qilma. Javobni o'zbek tilida, qisqa, "
@@ -13547,7 +13547,10 @@ def sozlamalar(message):
 def _settings_vals():
     """Sozlamalar qiymatlari — bo'lim ekranlari uchun bitta joydan."""
     v = {}
-    v["sn"]=get_setting("shop_name","Bonus Market"); v["ot"]=get_setting("shop_open_time","09:00")
+    # Yangi tenantda settings bo'sh — nomni markaziy bazadan olamiz
+    # (CFG.SHOP_NAME = tenants.name). Boshliq 🏪 Do'kon nomi orqali
+    # o'zgartirsa, settings dagi qiymat ustun turadi.
+    v["sn"]=get_setting("shop_name", CFG.SHOP_NAME); v["ot"]=get_setting("shop_open_time","09:00")
     v["ct"]=get_setting("shop_close_time","21:00"); v["r"]=get_setting("gps_radius","200")
     v["tt"]=get_setting("tips_time","10:00"); v["lt"]=get_setting("late_check_time","10:30")
     v["qe"]=get_setting("quiz_enabled","1"); v["ce"]=get_setting("chat_enabled","1")
@@ -14192,7 +14195,7 @@ def task_history_cb(call):
             _show_task_history(call.message.chat.id, call.from_user.id, target_id)
         except: pass
 
-print("✅ Bonus Market bot ishga tushdi...")
+print("✅ AI MARKET bot ishga tushdi...")
 # ===== MARKETING TAHLIL (Claude AI) =====
 def get_marketing_analysis():
     """✅ TUZATILGAN: Bito'dan ma'lumot olib, Claude AI orqali marketing tahlil qiladi."""
