@@ -5294,6 +5294,34 @@ def get_bito_context_for_ai():
     except Exception as e:
         return f"Bito ma'lumotlari vaqtincha yuklanmadi ({str(e)[:50]})"
 
+# ══════════════════ 🧑‍💻 BOT YARATUVCHISI ══════════════════
+# ⚠️ Bu ma'lumot PLATFORMA darajasida — barcha bizneslar uchun bir xil,
+# shuning uchun CFG ga bog'lanmaydi (do'kon nomidan farqi shunda).
+# AI "Seni kim yaratgan?" degan savolga shu ma'lumot asosida javob beradi.
+
+BOT_CREATOR_SHORT = "Bekbergenov Ulugbek"
+
+BOT_CREATOR_FULL = (
+    "Bekbergenov Ulugbek — O'zbekiston fuqarosi, 1991 yilda Xorazmda "
+    "tug'ilib o'sgan. Oliy ma'lumotli, bir yil Germaniyada o'qib kelgan. "
+    "2014 yildan buyon biznesda faoliyat yuritadi, asosan oziq-ovqat "
+    "biznesi yo'nalishida katta tajribaga ega. Asosiy faoliyati — "
+    "bizneslarni avtomatlashtirish. Bugungi kunda bizneslarga AI ni joriy "
+    "qilib, biznes egalarining vaqtini va pulini sezilarli tejashda "
+    "yordam bermoqda."
+)
+
+BOT_CREATOR_RULE = (
+    f"\n\nSENI KIM YARATGAN: seni {BOT_CREATOR_SHORT} yaratgan. "
+    f"\"Seni kim yaratgan?\", \"Kim ishlab chiqqan?\" kabi savolga "
+    f"QISQA javob ber: yaratuvchi — {BOT_CREATOR_SHORT}. "
+    f"Foydalanuvchi u haqida BATAFSIL so'rasagina quyidagini ayt:\n"
+    f"{BOT_CREATOR_FULL}\n"
+    f"Boshqa kompaniya yoki jamoa nomini AYTMA — sen faqat shu ma'lumotni "
+    f"bilasan. O'zingni model nomi bilan tanishtirma."
+)
+
+
 def ask_ai_chat(tg_id, user_message):
     """Claude API bilan chat — tarix saqlangan holda."""
     if tg_id not in AI_CHAT_SESSIONS:
@@ -5303,7 +5331,8 @@ def ask_ai_chat(tg_id, user_message):
                      f"bu ma'lumotlar AYNAN HOZIR do'konning holati. "
                      f"Shu raqamlar asosida aniq, lo'nda va amaliy javob ber. "
                      f"'Bito'ga ulana olmayman' dema — ma'lumotlar allaqachon quyida. "
-                     f"O'zbek tilida javob ber. Markdown formatlash ishlatma.\n\n{bito_ctx}")
+                     f"O'zbek tilida javob ber. Markdown formatlash ishlatma."
+                     f"{BOT_CREATOR_RULE}\n\n{bito_ctx}")
         AI_CHAT_SESSIONS[tg_id] = {"system": system_msg, "messages": []}
 
     session = AI_CHAT_SESSIONS[tg_id]
@@ -6903,7 +6932,8 @@ def ai_agent_answer(tg_id, chat_id, question, max_iters=5):
               f"ro'yxatini olib, har biriga roli/holatiga mos ANIQ vazifa taklif qil. "
               f"Agar foydalanuvchi oddiy xodim bo'lsa, moliyaviy/maxfiy ma'lumotlarni berma. "
               f"MUHIM: Javobda Markdown ishlatma — ## sarlavha, ** qalin, | jadval, --- chiziq "
-              f"MUTLAQO YO'Q. Oddiy matn, emoji va \"•\" belgili ro'yxatlar bilan chiroyli yoz.")
+              f"MUTLAQO YO'Q. Oddiy matn, emoji va \"•\" belgili ro'yxatlar bilan chiroyli yoz."
+              f"{BOT_CREATOR_RULE}")
     messages = [{"role": "user", "content": question}]
     headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
                "content-type": "application/json"}
@@ -21953,7 +21983,8 @@ def tenant_setting(key, bonnu_default=""):
         return v
     if bonnu_default and key not in _TENANT_WARNED:
         _TENANT_WARNED.add(key)
-        print(f"⚠️ TENANT: '{key}' sozlanmagan — Bonnu Market qiymati ishlatilyapti "
+        # tenant-ok: ataylab — sozlama ko'chib qolganini AYTISH uchun
+        print(f"⚠️ TENANT: '{key}' sozlanmagan — Bonnu Market qiymati ishlatilyapti "  # tenant-ok
               f"({bonnu_default}). Boshqa do'konda bu XATO. /sozlama bilan tekshiring.",
               flush=True)
     return bonnu_default
@@ -22123,6 +22154,8 @@ def tenant_config_cmd(message):
     def run():
         bot.send_message(chat_id, "⏳ Bito sozlamalari aniqlanmoqda...")
         found = bito_autodetect_config()
+        # tenant-ok: /sozlama tashxisi — yangi mijozda sozlama asl nusxadan
+        # ko'chib qolganini aniqlash uchun Bonnu qiymatlari bilan solishtiradi
         BONNU = {"bito_org_id": "693fea06ff2118868c955b6c",
                  "bito_warehouse_id": "69424f36a3a3cc43da908320",
                  "bito_currency_id": "69424f34f461a9f6fd61972d",
@@ -22142,12 +22175,12 @@ def tenant_config_cmd(message):
             out.append(f"{mark} <code>{k}</code>\n   {cur} <i>({src})</i>")
         out.append("")
         if get_setting("bito_org_id", "") == BONNU["bito_org_id"]:
-            out.append("🏪 Do'kon: <b>Bonnu Market</b> (asl nusxa)")
+            out.append("🏪 Do'kon: <b>Bonnu Market</b> (asl nusxa)")  # tenant-ok
         else:
             out.append("🏪 Do'kon: <b>yangi mijoz</b>")
             same = [k for k, v in BONNU.items() if get_setting(k, "") == v]
             if same:
-                out.append(f"⚠️ <b>{len(same)} ta sozlama hali ham Bonnu qiymatida!</b> "
+                out.append(f"⚠️ <b>{len(same)} ta sozlama hali ham Bonnu qiymatida!</b> "  # tenant-ok
                            f"Bu ishlamaydi: {', '.join(same)}")
         if risk:
             out.append(f"❌ {risk} ta sozlama aniqlanmadi — Bito'da ma'lumot yo'q "
