@@ -147,6 +147,14 @@ docs/HOLAT.md             shu fayl
 6. **Xodim guruh ichida modul filtri yo'q edi** — `menu_group_open`
    `EMP_MENU_ITEMS - hidden` ishlatardi, ya'ni sotib olinmagan modul
    tugmalari guruh ichida ko'rinardi. `visible_items("emp")` ga o'tdi
+7. **Fon threadlari tenant kontekstini yo'qotardi** — `contextvars`
+   yangi threadga ko'chmaydi, shuning uchun handlerdan ochilgan har
+   qanday `threading.Thread` `DEFAULT_TENANT` ga tushib qolardi.
+   Amalda: 🛒 Zakaz tavsiyasi firmalar ro'yxatini to'g'ri biznes
+   kaliti bilan olib, hisoblashni boshqa biznes kaliti bilan qilardi.
+   `tenant.py` da `threading.Thread.__init__` o'ralib, yaratilish
+   paytidagi kontekst ko'chiriladigan bo'ldi (69 ta chaqiruv joyi
+   tegilmadi)
 
 ---
 
@@ -186,12 +194,17 @@ docs/HOLAT.md             shu fayl
    tanasi bo'sh (o'lik kod). Haqiqiy ishni ikkinchisi qiladi — tahrirlaganda
    adashmang.
 
-8. **Menyu guruhlari ROL bo'yicha alohida.** `menu_groups(scope)` —
+8. **Fon threadida tenant kontekstini o'zingiz o'rnatishga urinmang.**
+   `tenant.py` `threading.Thread` ni o'rab qo'ygan — kontekst yaratilish
+   paytida nusxalanadi va o'zi ko'chadi. Bu o'ramni olib tashlasangiz,
+   69 ta joyda jimgina noto'g'ri biznes ishlatila boshlaydi.
+
+9. **Menyu guruhlari ROL bo'yicha alohida.** `menu_groups(scope)` —
    `menu_groups_adm` / `menu_groups_emp`. Eski `menu_groups` kaliti zaxira
    sifatida o'qiladi (bonnu shu bilan ishlaydi) — uni o'chirmang, aks holda
    allaqachon sozlangan bizneslar menyusi tekislanib ketadi.
 
-9. **`/start` ga "havolasiz ham kirsin" fallback qo'shmang.** Bir marta
+10. **`/start` ga "havolasiz ham kirsin" fallback qo'shmang.** Bir marta
    `len(tenants)==1` bo'lsa avtomatik bog'lash bor edi — natijada botni
    qidiruvdan topgan begona odam ro'yxatdan o'ta olardi. Kirish faqat
    taklif havolasi orqali: ega `?start=<slug>` (telefon bilan), hodim

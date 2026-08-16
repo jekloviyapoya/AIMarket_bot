@@ -34,6 +34,47 @@ import central as C  # noqa: E402
 
 CURRENT = contextvars.ContextVar("tenant_slug", default=None)
 
+
+# ────────── Fon threadlariga tenant kontekstini ko'chirish ──────────
+# contextvars YANGI THREADGA KO'CHMAYDI: threading.Thread bo'sh kontekst
+# bilan boshlanadi, CURRENT.get() None qaytaradi va kod DEFAULT_TENANT ga
+# tushib qoladi.
+#
+# Amalda bu shunday ko'rindi: 🛒 Zakaz tavsiyasi firmalar ro'yxatini
+# TO'G'RI biznesning Bito kaliti bilan oladi, keyin hisoblashni fon
+# threadida bajaradi — u yerda kontekst yo'q, shuning uchun BOSHQA
+# biznesning kaliti ishlatiladi. Natija: "Ushbu ma'lumotlarga ega
+# yetkazib beruvchi topilmadi" (HTTP 400).
+#
+# Xato bermagan hollarda esa bundan ham yomoni bo'lardi: bir biznesning
+# fon amali ikkinchisining bazasiga yozilishi mumkin edi.
+#
+# Yechim: Thread yaratilayotgan paytdagi kontekstni nusxalab, target'ni
+# o'sha kontekstda yurgizamiz. Modul darajasida ochiladigan fon oqimlari
+# uchun kontekst baribir bo'sh — ular uchun hech narsa o'zgarmaydi.
+
+def _install_thread_context():
+    orig_init = threading.Thread.__init__
+    if getattr(orig_init, "_tenant_ctx_patched", False):
+        return
+
+    def init(self, *a, **kw):
+        ctx = contextvars.copy_context()
+        if kw.get("target") is not None:
+            fn = kw["target"]
+            kw["target"] = lambda *ta, **tkw: ctx.run(fn, *ta, **tkw)
+        elif len(a) >= 2 and callable(a[1]):
+            # Thread(group, target, ...) — pozitsion ko'rinish
+            fn = a[1]
+            a = (a[0], lambda *ta, **tkw: ctx.run(fn, *ta, **tkw)) + a[2:]
+        orig_init(self, *a, **kw)
+
+    init._tenant_ctx_patched = True
+    threading.Thread.__init__ = init
+
+
+_install_thread_context()
+
 # Kontekst o'rnatilmagan bo'lsa ishlatiladigan tenant (migratsiya davri uchun).
 # Ishlab chiqarishda buni bo'sh qoldirib, kontekstsiz chaqiruvlarni xatoga
 # chiqarish mumkin — hozircha mos ravishda ishlashi muhimroq.
