@@ -444,6 +444,34 @@ def now_str(): return now_dt().strftime("%Y-%m-%d %H:%M:%S")
 def today_str(): return now_dt().strftime("%Y-%m-%d")
 
 # --- Bito API helperlari ---
+
+def bito_err(e, limit=300):
+    """Bito xatosini TUSHUNARLI matnga aylantiradi.
+
+    requests ning `400 Client Error: Bad Request for url: ...` xabari
+    sababni aytmaydi — Bito esa javob tanasida aniq yozadi
+    (masalan {"code":10004,"message":"..."}). Ilgari bu tana tashlab
+    yuborilardi va foydalanuvchi ham, log ham faqat "400 Bad Request"
+    ko'rardi: nima noto'g'ri ekanini bilib bo'lmasdi.
+    """
+    r = getattr(e, "response", None)
+    if r is None:
+        return str(e)[:limit]
+    detail = ""
+    try:
+        j = r.json()
+        if isinstance(j, dict):
+            detail = str(j.get("message") or j.get("error") or j)
+        else:
+            detail = str(j)
+    except Exception:
+        detail = (r.text or "").strip()
+    endpoint = (r.url or "").split("/api/v2/")[-1].split("?")[0]
+    out = f"HTTP {r.status_code} · {endpoint}"
+    if detail:
+        out += f"\n{detail}"
+    return out[:limit]
+
 def _bito_emp_name(it):
     """Javobdan xodim/mas'ul shaxs nomini xavfsiz oladi (turli endpoint formatlariga moslashtirilgan)."""
     if not it: return "—"
@@ -1999,8 +2027,10 @@ def order_advice_cmd(message):
             days, cal = cash_calendar(30)
             bal_by_day = {r["date"]: r["balance"] for r in days}
         except Exception as e:
-            print("ORDER ADVICE ERR:", repr(e)[:300], flush=True)
-            bot.send_message(chat_id, f"⚠️ Xatolik: {str(e)[:200]}"); return
+            print("ORDER ADVICE ERR:", bito_err(e, 500), flush=True)
+            bot.send_message(chat_id,
+                             f"⚠️ <b>Xatolik</b>\n\n<code>{h(bito_err(e))}</code>",
+                             parse_mode="HTML"); return
         try: bot.delete_message(chat_id, note.message_id)
         except Exception: pass
 
@@ -5877,12 +5907,23 @@ def generate_zakaz_advice(chat_id, supplier_id, weeks=1):
     if is_license_locked():
         bot.send_message(chat_id, "🔒 Obuna muddati tugagan. To'lovni amalga oshirib, bot egasi bilan bog'laning.")
         return
+    # Firma tanlanmagan bo'lsa manzil `supplier/get-by-id/` bo'lib qoladi va
+    # Bito 400 qaytaradi — sababi ko'rinmagani uchun buni aniq ushlaymiz.
+    supplier_id = (supplier_id or "").strip()
+    if not supplier_id:
+        print("[ZAKAZ] supplier_id BO'SH — ro'yxatdagi firmada _id yo'q "
+              "yoki tugma eskirgan", flush=True)
+        bot.send_message(chat_id,
+                         "⚠️ Firma tanlanmadi. \U0001f6d2 Zakaz tavsiyasi ni "
+                         "qaytadan bosib, ro'yxatdan firmani tanlang.")
+        return
     try:
         _t0 = time.time()  # ⏱ Umumiy vaqt hisoblagichi
         headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
         base = "https://api.bito.uz/integration-api/integration/api/v2/"
 
         # 1. Firma ma'lumoti
+        print(f"[ZAKAZ] supplier_id={supplier_id!r} weeks={weeks}", flush=True)
         r_sup = requests.get(base + f"supplier/get-by-id/{supplier_id}",
                             headers=headers, timeout=10)
         r_sup.raise_for_status()
@@ -6248,8 +6289,10 @@ Javobni oddiy, qisqa va amaliy tilda yoz. Raqamlarni takrorlama, faqat izoh ber.
         print(f"[VAQT] ⏱ JAMI: {time.time()-_t0:.1f}s", flush=True)
         print(f"[ZAKAZ] ✅ {len(product_details)} faol, {len(stale_products)} stale, jami summa: {total_estimated:,.0f}", flush=True)
     except Exception as e:
-        print("ZAKAZ ERR:", str(e)[:200], flush=True)
-        bot.send_message(chat_id, f"⚠️ Xatolik: {str(e)[:100]}")
+        print("ZAKAZ ERR:", bito_err(e, 500), flush=True)
+        bot.send_message(chat_id, f"⚠️ <b>Zakaz tavsiyasi chiqmadi</b>\n\n"
+                                  f"<code>{h(bito_err(e))}</code>",
+                         parse_mode="HTML")
 
 # ===== ZAKAZ BO'LIMI TUGADI =====
 
