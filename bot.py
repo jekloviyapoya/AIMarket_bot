@@ -5244,7 +5244,7 @@ def get_bito_context_for_ai():
         week_start = (today - timedelta(days=6)).strftime("%Y-%m-%d")
         def to_utc(d): return _dt.datetime.strptime(d,"%Y-%m-%d").replace(tzinfo=UZT).astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-        ctx = f"Do'kon: Bonnu Market | Sana: {today.strftime('%d.%m.%Y')}\n\n"
+        ctx = f"Do'kon: {CFG.SHOP_NAME} | Sana: {today.strftime('%d.%m.%Y')}\n\n"
 
         # 1. Oylik top mahsulotlar
         try:
@@ -5298,7 +5298,7 @@ def ask_ai_chat(tg_id, user_message):
     """Claude API bilan chat — tarix saqlangan holda."""
     if tg_id not in AI_CHAT_SESSIONS:
         bito_ctx = get_bito_context_for_ai()
-        system_msg = (f"Sen Bonnu Market do'konining AI marketing maslahatchisisn. "
+        system_msg = (f"Sen {CFG.SHOP_NAME} do'konining AI marketing maslahatchisisn. "
                      f"Quyida HAQIQIY Bito savdo tizimidan olingan joriy ma'lumotlar bor — "
                      f"bu ma'lumotlar AYNAN HOZIR do'konning holati. "
                      f"Shu raqamlar asosida aniq, lo'nda va amaliy javob ber. "
@@ -5684,7 +5684,7 @@ def generate_personal_advice(emp_name, emp_data, all_context):
     avg = round(g/rc) if rc > 0 else 0
     marja = round(pr/g*100, 1) if g > 0 else 0
 
-    prompt = (f"Do'kon: Bonnu Market\n\n"
+    prompt = (f"Do'kon: {CFG.SHOP_NAME}\n\n"
               f"Xodim: {emp_name}\n"
               f"So'nggi 7 kun:\n"
               f"- Savdo: {fmt_money(g)}\n"
@@ -7189,7 +7189,7 @@ def nak_extract(content_blocks_or_text, is_text=False):
              "YETKAZIB BERUVCHI (supplier) QOIDASI: \"supplier\" ga hujjatdagi SOTUVCHI/"
              "YETKAZIB BERUVCHI tashkilot nomini yozing (\"Поставщик\", \"Продавец\", "
              "hujjat shapkasidagi firma). QUYIDAGILARNI supplier deb OLMANG: "
-             "\"Покупатель/Получатель\" (bu bizning do'kon — Yuldasheva, Bonnu va h.k.), "
+             f"\"Покупатель/Получатель\" (bu bizning do'kon — {CFG.SHOP_NAME} va h.k.), "
              "\"Ответственный\"/ekspeditor (bu shaxs ismi), mahsulot nomlari yoki "
              "brendlar (Snickers, Nestle kabi). Aniq sotuvchi nomi topilmasa — bo'sh "
              "qoldiring, foydalanuvchining o'zi tanlaydi. Firma nomiga mahsulot so'zini "
@@ -14420,7 +14420,7 @@ def get_marketing_analysis():
             avg = round(g/rc) if rc>0 else 0
             emps_text += f"- {name}: savdo={fmt_money(g)}, cheklar={rc}, o'rtacha chek={fmt_money(avg)}, foyda={fmt_money(pr)}\n"
 
-        prompt = f"""Sen Bonnu Market do'konining marketing maslahatchiasisn. Quyidagi haqiqiy savdo ma'lumotlari asosida aniq, amaliy marketing tavsiyalar ber. Faqat raqamlarga asoslangan, lo'nda va amaliy bo'lsin.
+        prompt = f"""Sen {CFG.SHOP_NAME} do'konining marketing maslahatchiasisn. Quyidagi haqiqiy savdo ma'lumotlari asosida aniq, amaliy marketing tavsiyalar ber. Faqat raqamlarga asoslangan, lo'nda va amaliy bo'lsin.
 
 Bugungi sana: {today.strftime('%d.%m.%Y')}
 
@@ -15601,7 +15601,7 @@ def _promo_ai_post(p, avoid_text=None, plain=False):
     amt = f"{p['amount']:g} {p.get('unit') or 'dona'}"
     if plain:
         prompt = (
-            "Sen «Bonnu Market» supermarketi uchun Telegram/Instagram "
+            "Sen «" + CFG.SHOP_NAME + "» supermarketi uchun Telegram/Instagram "
             "posti yozasan. O'zbek tilida, qisqa (60-90 so'z), jonli, "
             "2-4 ta emoji bilan. Maqsad: mahsulotni tanishtirish va "
             "sotuvni oshirish.\n\n"
@@ -15612,11 +15612,11 @@ def _promo_ai_post(p, avoid_text=None, plain=False):
             "2. Narx o'rniga ANIQ {NARX} joy tutuvchisini yoz.\n"
             "3. Mahsulotning foydasi/ta'mi/qulayligi haqida halol yoz, "
             "yolg'on va'da bermа.\n"
-            "4. Oxirida «Bonnu Market» bo'lsin. Shahar/manzil YOZMA.\n"
+            "4. Oxirida «" + CFG.SHOP_NAME + "» bo'lsin. Shahar/manzil YOZMA.\n"
             "5. FAQAT post matnini qaytar — izohsiz, sarlavhasiz." + avoid)
     else:
         prompt = (
-            "Sen «Bonnu Market» supermarketi uchun Telegram/Instagram "
+            "Sen «" + CFG.SHOP_NAME + "» supermarketi uchun Telegram/Instagram "
             "sotuv posti yozasan. O'zbek tilida, qisqa (60-90 so'z), jonli, "
             "2-4 ta emoji bilan. Maqsad: omborda turib qolgan tovarni tezroq sotish.\n\n"
             f"MAHSULOT: {p['name']}\n"
@@ -15625,7 +15625,7 @@ def _promo_ai_post(p, avoid_text=None, plain=False):
             "1. Narx o'rniga ANIQ {NARX} joy tutuvchisini yoz — egasi o'zi qo'yadi.\n"
             "2. Yolg'on va'da yozma (sifat/foyda haqida umumiy, halol gaplar).\n"
             "3. Oxirida do'kon nomi va «zaxira cheklangan» turtkisi bo'lsin.\n"
-            "   Shahar/manzil YOZMA — faqat «Bonnu Market».\n"
+            "   Shahar/manzil YOZMA — faqat «" + CFG.SHOP_NAME + "».\n"
             "4. FAQAT post matnini qaytar — izohsiz, sarlavhasiz." + avoid)
     headers = {"x-api-key": ANTHROPIC_API_KEY,
                "anthropic-version": "2023-06-01",
@@ -15714,11 +15714,11 @@ def _promo_caption(name, old_price, new_price, until=None, plain=False):
     try:
         if plain:
             prompt = (
-                "Sen «Bonnu Market» supermarketining Telegram kanali uchun "
+                "Sen «" + CFG.SHOP_NAME + "» supermarketining Telegram kanali uchun "
                 "mahsulot posti BOSHINI yozasan. O'zbek tilida. QUYIDAGI "
                 "TUZILISHDA, boshqa hech narsa yozma:\n"
                 "1-qator: mahsulotga mos bitta emoji + «" + name +
-                " endi BONNU MARKETda!»\n"
+                " endi " + CFG.SHOP_NAME.upper() + "da!»\n"
                 "2-qator: 💚 bilan qisqa kirish gap\n"
                 "So'ng 3-4 qator: ✅ bilan mahsulotning halol, ishonarli "
                 "afzalliklari (yolg'on va'da yozma).\n"
@@ -15729,12 +15729,12 @@ def _promo_caption(name, old_price, new_price, until=None, plain=False):
                 "FAQAT shu qatorlarni qaytar.")
         else:
             prompt = (
-                "Sen «Bonnu Market» supermarketining Telegram kanali uchun aksiya "
+                "Sen «" + CFG.SHOP_NAME + "» supermarketining Telegram kanali uchun aksiya "
                 "posti BOSHINI yozasan. O'zbek tilida. QUYIDAGI TUZILISHDA, "
                 "boshqa hech narsa yozma:\n"
                 "1-qator: 🔥 AKSIYA! AKSIYA! AKSIYA! 🔥\n"
                 "2-qator: mahsulotga mos bitta emoji + «" + name +
-                " endi BONNU MARKETda super narxda!»\n"
+                " endi " + CFG.SHOP_NAME.upper() + "da super narxda!»\n"
                 "3-qator: 💚 bilan qisqa kirish gap\n"
                 "So'ng 3-4 qator: ✅ bilan mahsulotning halol, ishonarli "
                 "afzalliklari (yolg'on va'da yozma).\n"
@@ -15756,9 +15756,9 @@ def _promo_caption(name, old_price, new_price, until=None, plain=False):
     except Exception as e:
         print("PROMO CAPTION ERR:", str(e)[:120], flush=True)
     if not head:
-        head = (f"🛒 {name} endi BONNU MARKETda!" if plain else
+        head = (f"🛒 {name} endi {CFG.SHOP_NAME.upper()}da!" if plain else
                 f"🔥 AKSIYA! AKSIYA! AKSIYA! 🔥\n"
-                f"🛒 {name} endi BONNU MARKETda super narxda!")
+                f"🛒 {name} endi {CFG.SHOP_NAME.upper()}da super narxda!")
     tail = []
     if plain:
         # 📄 Oddiy post: chegirma qatorlari va shoshilish turtkisi yo'q
@@ -15771,11 +15771,11 @@ def _promo_caption(name, old_price, new_price, until=None, plain=False):
                   if until else
                   "⏳ Shoshiling! Aksiya mahsuloti soni cheklangan.")]
     tail += ["",
-             f"📍 BONNU MARKET 🕗 Ish vaqti: {CFG.PROMO_HOURS}",
+             f"📍 {CFG.SHOP_NAME.upper()} 🕗 Ish vaqti: {CFG.PROMO_HOURS}",
              "🚚 Yetkazib berish xizmati mavjud",
              f"📞 Buyurtma uchun: {CFG.PROMO_PHONE}",
-             "📲 Telegram: @BonnuMarket",
-             "💚 BONNU MARKET – Sifat va Ishonch!"]
+             f"📲 Telegram: {_promo_channel()}" if _promo_channel() else "",
+             f"💚 {CFG.SHOP_NAME.upper()} – Sifat va Ishonch!"]
     cap = head + "\n\n" + "\n".join(tail)
     return cap[:1020]  # Telegram caption 1024 chegarasi
 
@@ -15861,7 +15861,9 @@ def _promo_poster_path(row_id):
 
 
 def _promo_channel():
-    return get_setting("promo_channel", "@BonnuMarket") or "@BonnuMarket"
+    # ⚠️ Standart qiymat BO'SH: ilgari bu yerda @BonnuMarket turardi va har
+    # bir yangi mijozning postlari BOSHQA do'konning kanaliga ishora qilardi.
+    return get_setting("promo_channel", "") or ""
 
 
 def _promo_publish(row_id, by_uid, notify_chat=None):
@@ -16795,7 +16797,7 @@ def promo_menu_cb(call):
             return
         W_PROMO_CHAN.add(uid)
         bot.send_message(chat_id, "📢 Kanal username'ini yozing "
-                                  "(masalan: @BonnuMarket). Bekor: /bekor")
+                                  "(masalan: @dokoningiz_kanali). Bekor: /bekor")
 
 
 @bot.message_handler(func=lambda m: m.from_user.id in W_PROMO_TIME
@@ -17803,7 +17805,7 @@ def promo_compose_scene(scene_bytes, old_price, new_price, ribbon="AKSIYA!"):
     # 3) Aloqa paneli — eng pastda
     d.rectangle((0, H - bar_h, W, H), fill=GREEN_D)
     d.text((W//2, H - bar_h + int(14*S)),
-           f"BONNU MARKET  ·  {CFG.PROMO_PHONE}",
+           f"{CFG.SHOP_NAME.upper()}  ·  {CFG.PROMO_PHONE}",
            font=F(34), fill=WHITE, anchor="ma")
     d.text((W//2, H - bar_h + int(66*S)),
            f"Ish vaqti {CFG.PROMO_HOURS}  ·  Yetkazib berish bor",
@@ -18137,9 +18139,9 @@ def openai_make_promo_poster(image_bytes, product_name, old_price,
         f"matching icon in a circle):\n{ben_lines}"
         f"{price_block}"
         '- Bottom brand bar across full width (dark green): white bold '
-        '"BONNU MARKET", phone "' + CFG.PROMO_PHONE + '", and smaller yellow '
+        '"' + CFG.SHOP_NAME.upper() + '", phone "' + CFG.PROMO_PHONE + '", and smaller yellow '
         'text "Ish vaqti ' + CFG.PROMO_HOURS + '  ·  Yetkazib berish bor  ·  '
-        '@bonnumarket".\n'
+        '" + (_promo_channel() or "") + "".\n'
         "Do NOT add any other text, prices, logos or watermarks.")
     try:
         r = requests.post(
@@ -20416,9 +20418,9 @@ def dashboard_login():
                 return resp
     html = f"""<!DOCTYPE html><html lang="uz"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Kirish — Bonnu Market</title>{_DASH_STYLE}</head><body>
+<title>Kirish — {CFG.SHOP_NAME}</title>{_DASH_STYLE}</head><body>
 <div class="login-box">
-  <h2>📊 Bonnu Market</h2>
+  <h2>📊 {CFG.SHOP_NAME}</h2>
   {"<div class='err'>" + err + "</div>" if err else ""}
   <form method="POST">
     <input type="text" name="username" placeholder="Login" required autofocus>
@@ -21867,8 +21869,8 @@ def dashboard_home():
 
     html = f"""<!DOCTYPE html><html lang="uz"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dashboard — Bonnu Market</title>{_DASH_STYLE}</head><body>
-<div class="topbar"><a href="/app" style="margin-right:10px">←</a><h1>📊 Bonnu Market — {h(u[1] or "")}</h1><a href="/dashboard/logout">Chiqish</a></div>
+<title>Dashboard — {CFG.SHOP_NAME}</title>{_DASH_STYLE}</head><body>
+<div class="topbar"><a href="/app" style="margin-right:10px">←</a><h1>📊 {CFG.SHOP_NAME} — {h(u[1] or "")}</h1><a href="/dashboard/logout">Chiqish</a></div>
 <div class="wrap">
 
   <div class="card"><h2>💵 Bugungi savdo (Bito, avtomatik) <span class="badge">{today_str()}</span></h2>
