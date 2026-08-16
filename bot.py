@@ -18,6 +18,7 @@ import tenant as TEN               # noqa: E402
 from tenant import (CFG, TDict, TSet, tenant_ctx, needs,  # noqa: E402
                     for_each_tenant, active_slugs)
 CENTRAL.init_central()
+CENTRAL.startup_checks()      # xavfli sozlamalarni ovoz chiqarib aytadi
 
 # ===== 🔒 MAXFIY KALITLAR — FAQAT ENVIRONMENT VARIABLE ORQALI =====
 # Bu qiymatlar HECH QACHON kodga yozilmasligi kerak — faqat Railway'ning

@@ -807,6 +807,94 @@ def recent_log(tid=None, limit=20):
     return qall("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,))
 
 
+# ──────────────── Ishga tushish tekshiruvlari ────────────────
+# Ikkala nosozlik ham JIM o'tadi: bot xatosiz ishlaydi, lekin ma'lumot
+# saqlanmaydi yoki barcha bizneslar bitta Bito hisobiga ulanadi. Shuning
+# uchun ishga tushishda ovoz chiqarib ogohlantiramiz.
+
+# Muhit o'zgaruvchisi tenantning O'Z qiymatini BOSIB KETADI
+# (saas/tenant.py → _Cfg.BITO_API_KEY va h.k.: `os.getenv(...) or ...`).
+ENV_OVERRIDES_ALL = [
+    ("BITO_API_KEY", "barcha bizneslar SIZNING Bito hisobingizga ulanadi"),
+    ("BITO_ORG_ID", "barcha bizneslarga bir xil tashkilot"),
+    ("BITO_PLU_FIELD_ID", "barcha bizneslarga bir xil PLU maydoni"),
+    ("BITO_KG_MEASURE_ID", "barcha bizneslarga bir xil kg o'lchovi"),
+    ("BITO_DEFAULT_UOM_ID", "barcha bizneslarga bir xil o'lchov birligi"),
+]
+
+# Bular faqat tenant topilmaganda ishlatiladi — xavfi kamroq, lekin
+# migratsiyadan keyin o'chirilishi kerak.
+ENV_FALLBACK_ONLY = ["SUPER_ADMIN_ID", "REVIEW_SECRET",
+                     "PROMO_PHONE", "PROMO_HOURS"]
+
+_LINE = "═" * 64
+
+
+def storage_is_ephemeral():
+    """Bazalar konteyner ichidami (ya'ni deploy'da o'chadigan joydami)?"""
+    app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        return os.path.commonpath(
+            [os.path.abspath(CENTRAL_DB), app_dir]) == app_dir
+    except ValueError:          # boshqa diskda — demak tashqarida
+        return False
+
+
+def startup_checks():
+    """Ishga tushishda xavfli sozlamalarni logga chiqaradi."""
+    problems = 0
+
+    if storage_is_ephemeral():
+        problems += 1
+        print(f"\n{_LINE}\n"
+              f"\U0001f534 MA'LUMOT SAQLANMAYDI — har deploy'da O'CHADI!\n"
+              f"   Baza: {CENTRAL_DB}\n"
+              f"   Bu yo'l konteyner ichida. Railway'da doimiy disk (volume)\n"
+              f"   ulanmagan yoki CENTRAL_DB_PATH ko'rsatilmagan.\n"
+              f"   TUZATISH: volume'ni /data ga ulang, so'ng\n"
+              f"             CENTRAL_DB_PATH=/data/central.db\n"
+              f"             TENANTS_DIR=/data/tenants\n"
+              f"{_LINE}", flush=True)
+
+    if not os.getenv("MASTER_KEY", "").strip():
+        problems += 1
+        print(f"\n{_LINE}\n"
+              f"\U0001f7e1 MASTER_KEY berilmagan.\n"
+              f"   Kalit avtomatik yaratilib .master_key fayliga yoziladi.\n"
+              f"   Fayl yo'qolsa BARCHA Bito kalitlari o'qib bo'lmas holga\n"
+              f"   keladi. Uni Railway Variables'ga qo'ying.\n"
+              f"{_LINE}", flush=True)
+
+    try:
+        n_tenants = len(list_tenants())
+    except Exception:
+        n_tenants = 0
+
+    bad = [(k, why) for k, why in ENV_OVERRIDES_ALL if os.getenv(k, "").strip()]
+    if bad:
+        problems += 1
+        print(f"\n{_LINE}\n"
+              f"\U0001f534 ESKI, BIR TENANTLI MUHIT O'ZGARUVCHILARI TURIBDI\n"
+              f"   Bular har bir biznesning O'Z sozlamasini bosib ketadi\n"
+              f"   ({n_tenants} ta biznes ta'sirlanadi):", flush=True)
+        for k, why in bad:
+            print(f"     • {k} — {why}", flush=True)
+        print(f"   TUZATISH: Railway Variables'dan o'chiring. Bito kalitini\n"
+              f"             endi har bir biznes o'zi kiritadi.\n"
+              f"{_LINE}", flush=True)
+
+    soft = [k for k in ENV_FALLBACK_ONLY if os.getenv(k, "").strip()]
+    if soft:
+        print(f"\u26a0\ufe0f  Eski o'zgaruvchilar: {', '.join(soft)} — biznes "
+              f"topilmaganda ishlatiladi, migratsiyadan keyin o'chiring.",
+              flush=True)
+
+    if not problems:
+        print(f"\u2705 Sozlama tekshiruvi: baza {CENTRAL_DB} (doimiy), "
+              f"MASTER_KEY o'rnatilgan, eski o'zgaruvchilar yo'q.", flush=True)
+    return problems
+
+
 # ─────────────────────── Havolalar ───────────────────────
 
 MAIN_BOT_USERNAME = os.getenv("MAIN_BOT_USERNAME", "AIMARKETNM_BOT")
