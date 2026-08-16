@@ -7323,28 +7323,39 @@ def _nak_review_text(d):
                  "Xato ketgan bo'lsa: Bito'da xaridni o'chirib, nakladnoyni qayta yuboring.")
     return "\n".join(lines)
 
+_WEBAPP_WARNED = set()      # ogohlantirish bir marta chiqsin
+
+
 def _public_base_url():
-    """Botning tashqi (public) manzilini topadi — Railway avtomatik beradigan
-    domendan, yoki qo'lda sozlamadan (⚙️ agar kerak bo'lsa)."""
-    # 1) RAILWAY_PUBLIC_DOMAIN env var
-    domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
+    """Botning tashqi (public) HTTPS manzili. Topilmasa bo'sh satr.
+
+    ⚠️ Telegram WebApp tugmasi FAQAT https manzilni qabul qiladi. http
+    berilsa "Bad Request: ... Only HTTPS links are allowed" qaytaradi va
+    handler qulaydi (butun tugma ishlamay qoladi). Ilgari bu funksiya
+    domen topilmasa `http://localhost:PORT` qaytarardi — chaqiruvchilardagi
+    `if not base:` himoyasi esa bo'sh bo'lmagani uchun o'tib ketardi va
+    🏢 Firmalar, 🎯 Maqsadlar kabi tugmalar traceback bilan yiqilardi.
+    Endi https bo'lmagan qiymat umuman qaytarilmaydi.
+    """
+    domain = (os.getenv("RAILWAY_PUBLIC_DOMAIN", "") or "").strip().rstrip("/")
     if domain:
         return f"https://{domain}"
-    
-    # 2) Public URL setting'dan
-    custom_url = get_setting("public_base_url", "")
+
+    custom_url = (get_setting("public_base_url", "") or "").strip().rstrip("/")
     if custom_url:
-        return custom_url
-    
-    # 3) Fallback - Railway'da PORT environment variable mavjud bo'lsa, localhost'dan foydalanish
-    # Production'da bu ishlamaydi, lekin development'da port orqali test qilish mumkin
-    port = os.getenv("PORT", "")
-    if port:
-        print(f"WARNING: RAILWAY_PUBLIC_DOMAIN yoki public_base_url set qilinmagan. PORT={port} orqali fallback qilinmoqda.", flush=True)
-        # Bu development uchun. Production'da haqiqiy domain kerak.
-        return f"http://localhost:{port}"
-    
-    print("WARNING: _public_base_url() qayta qilish mo'ynati topilmadi", flush=True)
+        if custom_url.startswith("https://"):
+            return custom_url
+        if "bad_custom" not in _WEBAPP_WARNED:
+            _WEBAPP_WARNED.add("bad_custom")
+            print(f"WARNING: public_base_url https bilan boshlanishi shart — "
+                  f"e'tiborga olinmadi: {custom_url}", flush=True)
+
+    if "no_domain" not in _WEBAPP_WARNED:
+        _WEBAPP_WARNED.add("no_domain")
+        print("WARNING: Web App manzili yo'q (RAILWAY_PUBLIC_DOMAIN yoki "
+              "public_base_url sozlamasi). Railway → Settings → Networking → "
+              "Generate Domain. Shu paytgacha Web App tugmalari "
+              "ko'rsatilmaydi.", flush=True)
     return ""
 
 def _nak_review_markup(items=None, uid=None):
@@ -10267,10 +10278,12 @@ def nak_fix_callbacks(call):
             import time as _time, secrets as _secrets
             token = _secrets.token_urlsafe(16)
             nak_webapp_store(uid, st["items"], token)
-            url = (f"{_public_base_url()}/webapp/nakladnoy?uid={uid}&t={token}"
-                   f"&v={int(_time.time()*1000)}&focus={idx}")
+            _base = _public_base_url()
             mkw = types.InlineKeyboardMarkup()
-            mkw.add(types.InlineKeyboardButton("📱 Chiroyli tahrirlash", web_app=types.WebAppInfo(url=url)))
+            if _base:
+                url = (f"{_base}/webapp/nakladnoy?uid={uid}&t={token}"
+                       f"&v={int(_time.time()*1000)}&focus={idx}")
+                mkw.add(types.InlineKeyboardButton("📱 Chiroyli tahrirlash", web_app=types.WebAppInfo(url=url)))
             bot.send_message(chat_id,
                 f"🆕 <b>{h(it.get('name','?'))}</b> yangi mahsulot sifatida belgilandi.\n"
                 f"Sahifa shu qatorga ochiladi — <b>kategoriya</b>, kerak bo'lsa shtrix-kod va "
