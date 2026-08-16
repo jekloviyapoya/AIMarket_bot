@@ -773,6 +773,7 @@ if __name__ == "__main__":
         print("❌ ADMIN_BOT_TOKEN muhit o'zgaruvchisi kerak.")
         raise SystemExit(1)
     C.init_central()
+    C.startup_checks()
     threading.Thread(target=reminder_thread, daemon=True).start()
     print("🏢 Litsenziya boti ishga tushdi", flush=True)
     while True:

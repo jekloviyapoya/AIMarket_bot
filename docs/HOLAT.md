@@ -173,9 +173,14 @@ docs/HOLAT.md             shu fayl
    U Railway Variables'da turishi shart, volume'dagi `.master_key` fayliga
    tayanmang.
 
-6. **Migratsiyadan keyin eski env o'zgaruvchilarini o'chiring**
-   (`SUPER_ADMIN_ID`, `BITO_API_KEY`, `BITO_ORG_ID`, `REVIEW_SECRET`) —
-   aks holda ular BARCHA bizneslarga bir xil qo'llanadi.
+6. **Migratsiyadan keyin eski env o'zgaruvchilarini o'chiring.**
+   `BITO_API_KEY`, `BITO_ORG_ID`, `BITO_PLU_FIELD_ID`,
+   `BITO_KG_MEASURE_ID`, `BITO_DEFAULT_UOM_ID` — bular tenantning O'Z
+   qiymatini **bosib ketadi** (`_Cfg`: `os.getenv(...) or ...`), ya'ni
+   barcha bizneslar sizning Bito hisobingizga ulanadi.
+   `SUPER_ADMIN_ID`, `REVIEW_SECRET`, `PROMO_PHONE`, `PROMO_HOURS` —
+   faqat tenant topilmaganda ishlatiladi, xavfi kamroq.
+   Ishga tushishda `startup_checks()` ikkalasini ham logga chiqaradi.
 
 7. **`bot.py` da `for _col in (...)` sikli ikki marta yozilgan**, birinchisining
    tanasi bo'sh (o'lik kod). Haqiqiy ishni ikkinchisi qiladi — tahrirlaganda
@@ -278,16 +283,20 @@ tekshirish va hisoblash kerak. Aks holda bitta faol mijoz butun foydani yeydi.
 **Tartibni buzmang** — aks holda bot bo'sh baza yaratib, mavjud ma'lumotlarni
 ko'rmaydi.
 
-1. Railway Variables: `MASTER_KEY`, `ADMIN_BOT_TOKEN`, `SAAS_OWNER_ID`,
-   `MAIN_BOT_USERNAME` (`.env.example` ga qarang)
-2. **Avval migratsiya:**
+1. **Doimiy disk (volume) `/data` ga ulangan bo'lsin** — bo'lmasa bazalar
+   konteyner ichiga yoziladi va HAR DEPLOY'DA O'CHADI. Ishga tushish
+   logida `🔴 MA'LUMOT SAQLANMAYDI` chiqsa — shu.
+2. Railway Variables: `MASTER_KEY`, `ADMIN_BOT_TOKEN`, `SAAS_OWNER_ID`,
+   `MAIN_BOT_USERNAME`, `ADMIN_BOT_USERNAME`, `CENTRAL_DB_PATH`,
+   `TENANTS_DIR` (`.env.example` ga qarang)
+3. **Avval migratsiya:**
    ```bash
    python3 saas/migrate_bonnu.py --dry-run          # avval sinov
    python3 saas/migrate_bonnu.py --phone +998... \
        --owner-tg $SUPER_ADMIN_ID --bito-key "$BITO_API_KEY" --years 5
    ```
-3. Eski env o'zgaruvchilarini o'chirish (5-bo'lim, 6-band)
-4. Keyin botni ishga tushirish: `python3 bot.py`
+4. Eski env o'zgaruvchilarini o'chirish (5-bo'lim, 6-band)
+5. Keyin botni ishga tushirish: `python3 bot.py`
 
 ### Sinov muhiti (tavsiya etiladi)
 
