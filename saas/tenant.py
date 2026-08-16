@@ -402,6 +402,9 @@ class TSet:
 
 # ─────────────────────── Konfiguratsiya proksisi ───────────────────────
 
+_BAD_KEY_WARNED = set()      # qaysi biznes uchun ogohlantirilgan
+
+
 class _Cfg:
     """Tenantga bog'liq sozlamalar. bot.py da SUPER_ADMIN_ID → CFG.SUPER_ADMIN_ID.
 
@@ -487,8 +490,15 @@ class _Cfg:
         try:
             key.encode("latin-1")
         except (UnicodeEncodeError, AttributeError):
-            print("BITO: saqlangan kalit yaroqsiz (lotin bo'lmagan belgi) — "
-                  "e'tiborga olinmadi", flush=True)
+            # Har chaqiruvda emas, biznesga BIR MARTA ogohlantiramiz —
+            # aks holda log soniyasiga o'nlab bir xil qator bilan to'lardi.
+            slug = current()
+            if slug not in _BAD_KEY_WARNED:
+                _BAD_KEY_WARNED.add(slug)
+                print(f"BITO [{slug}]: saqlangan kalit yaroqsiz (lotin "
+                      f"bo'lmagan belgi) — e'tiborga olinmadi. ⚙️ Sozlamalar → "
+                      f"🏪 Do'kon sozlamalari → 🔌 Bito API kaliti orqali "
+                      f"qaytadan kiriting.", flush=True)
             return ""
         return key
 
