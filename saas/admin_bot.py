@@ -32,6 +32,11 @@ import central as C  # noqa: E402
 
 ADMIN_TOKEN = os.getenv("ADMIN_BOT_TOKEN", "").strip()
 OWNER_ID = int(os.getenv("SAAS_OWNER_ID", "0") or "0")
+# Potensial mijozga ko'rsatiladigan aloqa ma'lumotlari
+OWNER_USERNAME = (os.getenv("SAAS_OWNER_USERNAME", "") or "").lstrip("@")
+OWNER_PHONE = os.getenv("SAAS_OWNER_PHONE", "") or ""
+
+LEAD = {}       # tg_id -> {"step": ..., "data": {...}}  ariza sehrgari
 
 bot = telebot.TeleBot(ADMIN_TOKEN) if ADMIN_TOKEN else None
 if bot:
@@ -103,16 +108,84 @@ def ack(call, text=""):
         pass
 
 
+# ──────────────── 📝 Potensial mijoz (ariza qoldirish) ────────────────
+# Asosiy bot havolasiz kelgan odamni shu botga yo'naltiradi. Ilgari bu yer
+# "bu bot platforma egasiga tegishli" deb tugardi — ya'ni yo'l berkilardi
+# va potensial mijoz yo'qolardi. Endi mahsulot haqida qisqa ma'lumot va
+# bog'lanish yo'li beriladi.
+
+def _contact_lines():
+    out = []
+    if OWNER_USERNAME:
+        out.append(f"💬 Telegram: @{OWNER_USERNAME}")
+    if OWNER_PHONE:
+        out.append(f"📞 Telefon: {OWNER_PHONE}")
+    return out
+
+
+def _pitch_text():
+    t = ["🏪 <b>AI MARKET</b> — do'kon va supermarketlar uchun "
+         "Telegram bot", "",
+         "Bito bilan ulanadi va telefoningizdan boshqarish imkonini beradi:",
+         "• Xodimlar — GPS bilan kelish/ketish, davomat, ish haqi, vazifa",
+         "• Savdo — bugungi savdo, foyda, cheklar, xodim bo'yicha",
+         "• Ombor — qoldiq, inventarizatsiya, zarur mahsulotlar",
+         "• Ta'minot — nakladnoy rasmini yuborasiz, o'zi bog'lanadi",
+         "• Mijozlar — QR orqali baholash, taklif va shikoyatlar", "",
+         "Har bir do'kon o'z ma'lumoti bilan alohida ishlaydi. Kerakli "
+         "bo'limlarnigina tanlaysiz."]
+    c = _contact_lines()
+    if c:
+        t += ["", "<b>Bog'lanish:</b>"] + c
+    t += ["", "Yoki quyidagi tugma orqali ariza qoldiring — o'zimiz "
+              "bog'lanamiz."]
+    return "\n".join(t)
+
+
+def _pitch_kb():
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("📝 Ariza qoldirish",
+                                      callback_data="lead:new"))
+    if OWNER_USERNAME:
+        kb.add(types.InlineKeyboardButton("💬 Yozish",
+                                          url=f"https://t.me/{OWNER_USERNAME}"))
+    return kb
+
+
+def _lead_phone_kb():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    kb.add(types.KeyboardButton("📱 Raqamni yuborish",
+                                request_contact=True))
+    kb.add("❌ Bekor")
+    return kb
+
+
+def _lead_finish(uid, chat_id, username):
+    d = LEAD.pop(uid, {}).get("data", {})
+    lead_id = C.add_lead(uid, name=d.get("name", ""), shop=d.get("shop", ""),
+                         phone=d.get("phone", ""), username=username or "")
+    send(chat_id,
+         "✅ <b>Arizangiz qabul qilindi!</b>\n\n"
+         "Tez orada siz bilan bog'lanamiz. Rahmat.",
+         reply_markup=types.ReplyKeyboardRemove())
+    if OWNER_ID:
+        u = f"@{username}" if username else f"<code>{uid}</code>"
+        send(OWNER_ID,
+             f"🆕 <b>Yangi ariza</b> #{lead_id}\n\n"
+             f"👤 {h(d.get('name','—'))}\n"
+             f"🏪 {h(d.get('shop','—'))}\n"
+             f"📞 {h(d.get('phone','—'))}\n"
+             f"💬 {u}")
+
+
 # ─────────────────────────── /start ───────────────────────────
 
 if bot:
     @bot.message_handler(commands=["start", "menu"])
     def cmd_start(m):
         if not is_owner(m.from_user.id):
-            send(m.chat.id,
-                 "🔒 Bu bot platforma egasiga tegishli.\n\n"
-                 "Agar siz biznes egasi bo'lsangiz — sizga berilgan havola "
-                 "orqali asosiy botga kiring.")
+            LEAD.pop(m.from_user.id, None)
+            send(m.chat.id, _pitch_text(), reply_markup=_pitch_kb())
             return
         W.pop(m.from_user.id, None)
         n = len(C.list_tenants())
@@ -128,6 +201,80 @@ if bot:
             return
         W.pop(m.from_user.id, None)
         send(m.chat.id, "Bekor qilindi.", reply_markup=main_kb())
+
+    # ── 📝 Ariza sehrgari (faqat platforma egasi BO'LMAGANLAR) ──
+
+    @bot.callback_query_handler(func=lambda c: c.data == "lead:new")
+    def lead_new(call):
+        ack(call)
+        uid = call.from_user.id
+        if is_owner(uid):
+            return
+        LEAD[uid] = {"step": "name", "data": {}}
+        send(call.message.chat.id,
+             "📝 <b>Ariza</b>\n\n1/3 — Ism va familiyangizni yozing:",
+             reply_markup=types.ReplyKeyboardRemove())
+
+    @bot.message_handler(func=lambda m: (m.text or "") == "❌ Bekor"
+                         and m.from_user.id in LEAD)
+    def lead_cancel(m):
+        LEAD.pop(m.from_user.id, None)
+        send(m.chat.id, "Bekor qilindi.",
+             reply_markup=types.ReplyKeyboardRemove())
+
+    @bot.message_handler(content_types=["contact"],
+                         func=lambda m: m.from_user.id in LEAD)
+    def lead_contact(m):
+        uid = m.from_user.id
+        st = LEAD.get(uid) or {}
+        if st.get("step") != "phone":
+            return
+        c = m.contact
+        if not c or c.user_id != uid:
+            send(m.chat.id, "⚠️ Faqat O'ZINGIZNING raqamingizni yuboring.")
+            return
+        st["data"]["phone"] = c.phone_number
+        _lead_finish(uid, m.chat.id, m.from_user.username)
+
+    @bot.message_handler(func=lambda m: m.from_user.id in LEAD
+                         and (m.text or "").strip()
+                         and not (m.text or "").startswith("/"))
+    def lead_step(m):
+        uid = m.from_user.id
+        st = LEAD.get(uid) or {}
+        txt = (m.text or "").strip()[:80]
+        step = st.get("step")
+        if step == "name":
+            st["data"]["name"] = txt
+            st["step"] = "shop"
+            send(m.chat.id, "2/3 — Do'koningiz nomi va shahri:")
+        elif step == "shop":
+            st["data"]["shop"] = txt
+            st["step"] = "phone"
+            send(m.chat.id,
+                 "3/3 — Telefon raqamingizni yuboring (yoki qo'lda yozing):",
+                 reply_markup=_lead_phone_kb())
+        elif step == "phone":
+            st["data"]["phone"] = txt
+            _lead_finish(uid, m.chat.id, m.from_user.username)
+
+    @bot.message_handler(commands=["arizalar"])
+    def cmd_leads(m):
+        if not guard(m):
+            return
+        rows = C.leads(limit=20)
+        if not rows:
+            send(m.chat.id, "📭 Hozircha ariza yo'q.")
+            return
+        out = [f"📝 <b>Arizalar</b> — oxirgi {len(rows)} ta", ""]
+        for r in rows:
+            u = (f"@{r['username']}" if r["username"]
+                 else f"<code>{r['tg_id']}</code>")
+            out.append(f"<b>#{r['id']}</b> {h(r['name'] or '—')} · "
+                       f"{h(r['shop'] or '—')}\n"
+                       f"   📞 {h(r['phone'] or '—')} · {u} · "
+                       f"{(r['created_at'] or '')[:16]}")
+        send(m.chat.id, "\n".join(out))
 
 
 # ─────────────────── Yangi biznes ochish (sehrgar) ───────────────────

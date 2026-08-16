@@ -226,6 +226,13 @@ CREATE TABLE IF NOT EXISTS audit_log (
     action TEXT, detail TEXT DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS leads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tg_id INTEGER, username TEXT DEFAULT '',
+    name TEXT DEFAULT '', shop TEXT DEFAULT '', phone TEXT DEFAULT '',
+    note TEXT DEFAULT '', status TEXT DEFAULT 'new', created_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_tu_tenant   ON tenant_users(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_lic_tenant  ON licenses(tenant_id, ends_at);
 CREATE INDEX IF NOT EXISTS idx_pay_tenant  ON payments(tenant_id, paid_at);
@@ -685,6 +692,31 @@ def revenue_summary(month=None):
               if license_state(t["id"])[0] in ("active", "trial", "grace")]
     mrr = sum(monthly_price(t["id"]) for t in active)
     return (r1["s"] if r1 else 0, r2["s"] if r2 else 0, len(active), mrr)
+
+
+# ─────────────────────── Arizalar (leads) ───────────────────────
+# Litsenziya botiga kirgan potensial mijoz qoldirgan ariza. Telegram
+# xabari o'tkazib yuborilsa ham yo'qolmasin uchun bazaga ham yoziladi.
+
+def add_lead(tg_id, name="", shop="", phone="", username="", note=""):
+    q("""INSERT INTO leads (tg_id,username,name,shop,phone,note,created_at)
+         VALUES (?,?,?,?,?,?,?)""",
+      (tg_id, username, name, shop, norm_phone(phone) if phone else "",
+       note, now_str()))
+    row = qone("SELECT id FROM leads WHERE tg_id=? ORDER BY id DESC LIMIT 1",
+               (tg_id,))
+    return row["id"] if row else 0
+
+
+def leads(status="", limit=50):
+    if status:
+        return qall("SELECT * FROM leads WHERE status=? ORDER BY id DESC "
+                    "LIMIT ?", (status, limit))
+    return qall("SELECT * FROM leads ORDER BY id DESC LIMIT ?", (limit,))
+
+
+def set_lead_status(lead_id, status):
+    q("UPDATE leads SET status=? WHERE id=?", (status, lead_id))
 
 
 # ─────────────────────── Takliflar (invite) ───────────────────────
