@@ -4,7 +4,11 @@
 > shuni o'qing: nima qilingan, nega shunday qilingan, nima qolgan, nimaga
 > tegmaslik kerak.
 >
-> Oxirgi yangilanish: 2026-08-15 · branch `multitenant` (5 commit, PR #1)
+> Oxirgi yangilanish: 2026-08-16 · `main` (11 PR merge qilingan, #1–#11)
+>
+> Birinchi kun jonli ishga tushirish bo'ldi: ikkita mijoz ulandi, Bito'dan
+> haqiqiy savdo keldi va yetti xil jim ishlaydigan xato topildi. Ularning
+> hammasi bitta naqshdan — 4-bo'limning oxiriga qarang.
 
 ---
 
@@ -94,7 +98,7 @@ Premium 2.2M so'm/oy (narxlar hali yakuniy tasdiqlanmagan).
 ## 3. Fayl tuzilishi
 
 ```
-bot.py                    asosiy bot (21 917 qator) — endi tenant yadrosi ustida
+bot.py                    asosiy bot (22 268 qator) — endi tenant yadrosi ustida
 saas/central.py           markaziy registr: bizneslar, modullar, litsenziya,
                           to'lov, taklif havolalari, Bito kalitlarini shifrlash
 saas/tenant.py            tenant yadrosi: kontekst, DB registri, TDict/TSet,
@@ -127,6 +131,16 @@ docs/HOLAT.md             shu fayl
 - [x] **Ikki darajali menyu** — yuqori daraja = modul. Guruhlar rol
       bo'yicha alohida (`menu_groups_adm` / `menu_groups_emp`) va yangi
       biznesga avtomatik o'rnatiladi
+- [x] Bito API kalitini ⚙️ Sozlamalar orqali kiritish va almashtirish
+      (ilgari faqat ro'yxatdan o'tishda, bir marta kiritish mumkin edi)
+- [x] Litsenziya botida **ariza qoldirish** — begona odam mahsulot haqida
+      ma'lumot, aloqa va ariza formasini ko'radi; ariza `leads` jadvaliga
+      yoziladi va platforma egasiga xabar boradi (`/arizalar`)
+- [x] **Ishga tushish tekshiruvi** (`startup_checks`) — vaqtinchalik disk,
+      `MASTER_KEY` yo'qligi va eski env o'zgaruvchilari logda qizil bilan
+- [x] Fon threadlarida tenant konteksti saqlanadi
+- [x] Bito xatosining sababi ko'rinadi (`bito_err`) — HTTP kodi va Bito'ning
+      o'z izohi bilan
 
 ### Yo'l-yo'lakay tuzatilgan kamchiliklar
 
@@ -155,6 +169,43 @@ docs/HOLAT.md             shu fayl
    `tenant.py` da `threading.Thread.__init__` o'ralib, yaratilish
    paytidagi kontekst ko'chiriladigan bo'ldi (69 ta chaqiruv joyi
    tegilmadi)
+8. **Do'kon nomi kodga qattiq yozilgan edi** — 20+ joyda, katta va kichik
+   harflarda. Har bir mijozning AI'si o'zini "Bonnu Market uchun
+   yaratilgan" deb tanishtirardi, reklama postlari «BONNU MARKET» deb
+   imzolanardi. Eng og'iri: `_promo_channel()` standarti `"@BonnuMarket"`
+   edi — yangi mijozning posti BOSHQA do'konning kanaliga chaqirardi
+9. **Web App manzili `http://localhost:PORT` qaytarardi** — Telegram
+   WebApp tugmasiga faqat `https` qabul qiladi, natijada 🏢 Firmalar
+   traceback bilan yiqilardi. Chaqiruvchilardagi `if not base:` himoyasi
+   ishlamasdi, chunki qiymat bo'sh emas edi
+10. **Bito kaliti o'rniga menyu tugmasi saqlanib qolardi** — onboarding
+    filtri buyruq bo'lmagan HAR QANDAY matnni kalit deb qabul qilardi.
+    "👥 Xodimlar" saqlangach, emoji HTTP sarlavhasiga tushib har bir Bito
+    chaqiruvi `latin-1 codec can't encode` bilan yiqilardi
+11. **`shop_name` urug'i "Bonus Market" ni fizik yozardi** — modul
+    darajasidagi `INSERT OR IGNORE` `DEFAULT_TENANT` bazasiga yozar, shu
+    sababli `CFG.SHOP_NAME` zaxirasi hech qachon ishga tushmasdi
+
+### 🔍 Bularning hammasi BITTA naqshdan
+
+Bot dastlab **bitta do'kon uchun** yozilgan. Ko'p ijarachi qilinganda
+"Bonnu" ning izlari kodda qolib ketdi va ular **xato bermaydi** — kod
+ishlayveradi, faqat noto'g'ri do'kon bilan. Uch xil ko'rinishi bor:
+
+| Ko'rinish | Misol | Qanday topiladi |
+|---|---|---|
+| Qattiq yozilgan matn | `"Bonnu Market"`, `"@BonnuMarket"` | matn qidiruvi, **katta-kichik harfga e'tibor** |
+| Standart qiymat | `get_setting(k, "@BonnuMarket")` | `grep "get_setting(.*, \""` |
+| Kontekst yo'qolishi | fon threadi, callback, kesh | `threading.Thread`, global lug'atlar |
+
+⚠️ **Saboq:** birinchi qidiruvda `Bonnu` ni izladim va "tuzatildi" dedim.
+`BONNU MARKET` (katta harfli, reklama postlarida) o'tib ketdi va mijozga
+chiqdi. Bunday qidiruvni **har doim `grep -i` bilan** qiling va natijani
+sanab chiqing.
+
+Yangi mijoz qo'shilganda birinchi ish — **har bir modulni o'sha mijozda
+bosib chiqish**, ayniqsa AI, marketing va nakladnoy bo'limlarini. Boshqa
+do'konning nomi yoki ma'lumoti chiqsa, shu naqshning yangi ko'rinishi.
 
 ---
 
@@ -209,6 +260,24 @@ docs/HOLAT.md             shu fayl
    qidiruvdan topgan begona odam ro'yxatdan o'ta olardi. Kirish faqat
    taklif havolasi orqali: ega `?start=<slug>` (telefon bilan), hodim
    `?start=e-<slug>-<token>` (keyin boshliq tasdig'i).
+
+11. **Do'kon nomini kodga yozmang.** Har doim `CFG.SHOP_NAME` — u markaziy
+    bazadagi biznes nomini beradi. Sinovda kod skaneri bor: AI va post
+    yo'llarida qattiq yozilgan nom paydo bo'lsa sinov yiqiladi.
+
+12. **`_promo_channel()` standarti BO'SH qolsin.** Ilgari u
+    `"@BonnuMarket"` qaytarardi va yangi mijozning reklama posti boshqa
+    do'konning kanaliga chaqirardi. Kanal sozlanmagan bo'lsa — qator
+    umuman chiqmasin.
+
+13. **Web App manzili faqat `https` bo'lsin.** `_public_base_url()`
+    `http` qaytarmasligi kerak: Telegram WebApp tugmasini rad etadi va
+    handler qulaydi. Topilmasa bo'sh satr qaytarsin — chaqiruvchilarda
+    `if not base:` himoyasi bor.
+
+14. **Sehrgar matn kutayotganda menyu tugmasini yutmasin.**
+    `_is_menu_text()` bilan tekshiring. Bito kaliti o'rniga
+    "👥 Xodimlar" saqlanib qolgani shundan edi.
 
 ---
 
@@ -287,7 +356,11 @@ tekshirish va hisoblash kerak. Aks holda bitta faol mijoz butun foydani yeydi.
 - `📈 MARKETING` submenyusida boshqa modulga tegishli tugmalar bor
   (nakladnoy → `taminot`, ABC → `mijozlar`) — submenyu ko'rinishi filtrlanmagan
 - CI: `python3.12 -m py_compile bot.py saas/*.py` ishlatadigan GitHub Actions
-- `bot.py` ni modullarga bo'lish (21 917 qator bitta faylda)
+  (hozircha YO'Q — har merge tekshirilmasdan deploy bo'ladi)
+- Sinov skriptlarini repoga ko'chirish (hozir sessiya papkasida — 8-bo'limga qarang)
+- Veb-ilovaning brauzer kalitlari hali `bonnu-v1` / `bonnu_queue` — bir odam
+  ikki do'konning ilovasini bitta brauzerda ochsa navbat aralashishi mumkin
+- `bot.py` ni modullarga bo'lish (21 900+ qator bitta faylda)
 
 ---
 
@@ -309,7 +382,29 @@ ko'rmaydi.
        --owner-tg $SUPER_ADMIN_ID --bito-key "$BITO_API_KEY" --years 5
    ```
 4. Eski env o'zgaruvchilarini o'chirish (5-bo'lim, 6-band)
-5. Keyin botni ishga tushirish: `python3 bot.py`
+5. **Web App uchun public domen** — Railway → Settings → Networking →
+   Generate Domain (port 8080). Bo'lmasa 🏢 Firmalar, 🎯 Maqsadlar,
+   💰 Pul taqvimi kabi tugmalar "Web App manzili sozlanmagan" deydi
+6. Keyin botni ishga tushirish: `python3 bot.py`
+
+### Deploy haqiqatan tushganini qanday bilish
+
+Bot ishga tushganda logda `🧩 BUILD sha=xxxxxxxxxx` chiqadi — bu
+`bot.py` faylining SHA-256 boshi. Kutilgan qiymatni shunday hisoblang:
+
+```bash
+python3 -c "import hashlib; print(hashlib.sha256(open('bot.py','rb').read()).hexdigest()[:10])"
+```
+
+⚠️ **Railway'ning "Redeploy" tugmasi YANGI kodni olmaydi** — u o'sha
+commitni qaytadan quradi. Amalda shu sababli PR #3, #4 va #5 uzoq vaqt
+deploy bo'lmadi: uch marta Redeploy bosildi, uchalasi ham eski commit.
+Yangi kod uchun `main` ga push bo'lishi kerak (auto-deploy) yoki
+Deployments'da yangi commit tanlanishi.
+
+⚠️ `saas/` dagi o'zgarish `BUILD sha` ni **o'zgartirmaydi** — u faqat
+`bot.py` dan hisoblanadi. Bunday holatda deploy'ni xatti-harakat orqali
+tekshiring (masalan yangi tugma paydo bo'ldimi).
 
 ### Sinov muhiti (tavsiya etiladi)
 
@@ -338,9 +433,44 @@ Bu ishlar sinovdan o'tgan, regressiyani tekshirishda shu ro'yxatdan foydalaning:
 10. Admin botning barcha oqimlari
 
 Lokal sinov uchun `CENTRAL_DB_PATH` va `TENANTS_DIR` ni vaqtinchalik papkaga
-yo'naltiring, `TELEGRAM_BOT_TOKEN=123:FAKE` bilan `import bot` qilib
-handlerlarni `bot.process_new_messages([...])` orqali chaqirish mumkin —
-Telegram'ga chiqish shart emas.
+yo'naltiring, `TELEGRAM_BOT_TOKEN=123:FAKE` bilan `import bot` qiling va
+`bot.send_message` ni almashtirib javoblarni to'plang — Telegram'ga chiqish
+shart emas. Namuna:
+
+```python
+os.environ.update(TELEGRAM_BOT_TOKEN="123:FAKE", ANTHROPIC_API_KEY="sk-fake",
+                  CENTRAL_DB_PATH=f"{TMP}/central.db", TENANTS_DIR=f"{TMP}/tenants",
+                  MASTER_KEY="", DEFAULT_TENANT="bonnu")
+import bot as B, central as C
+SENT = []
+B.bot.send_message = lambda cid, text="", **kw: SENT.append((cid, text))
+C.create_tenant("Sherzod Market", "sherzodmarket", owner_phone="+998...")
+with B.tenant_ctx("sherzodmarket"):
+    ...
+```
+
+### Yozilgan sinov to'plamlari (2026-08-16)
+
+⚠️ **Bular repoda YO'Q** — sessiya papkasida qolgan. Ular yo'qolgan bo'lsa
+qayta yozish kerak; har biri bitta tuzatishning regressiyasini qo'riqlaydi.
+
+| To'plam | Nimani qo'riqlaydi |
+|---|---|
+| `test_gate` (17) | Havolasiz kirishning yopiqligi, taklif havolasi, tasdiq |
+| `test_menu` (28) | Ikki darajali menyu, modul bo'yicha yashirinish, `/menu` |
+| `test_checks` (13) | Ishga tushish tekshiruvi: disk, `MASTER_KEY`, eski env |
+| `test_name` (7) | Do'kon nomining biznesga bog'liqligi |
+| `test_bito` (14) | Bito kaliti tekshiruvi va himoya to'ri |
+| `test_bitoui` (11) | ⚙️ Sozlamalardagi Bito kaliti oynasi |
+| `test_webapp` (9) | Web App manzilining faqat `https` bo'lishi |
+| `test_lead` (18) | Litsenziya botidagi ariza oqimi |
+| `test_bitoerr` (11) | Bito xatosi sababining ko'rinishi |
+| `test_thread` (9) | Fon threadlarida tenant konteksti |
+| `test_nom` (9) | Kodda qattiq yozilgan do'kon nomi qolmagani |
+
+Eng qimmatlisi — oxirgi ikkitasi: `test_thread` ikki biznes bir vaqtda
+ishlaganda aralashmasligini, `test_nom` esa kodni skanerlab qattiq yozilgan
+nom qaytib kirmasligini tekshiradi.
 
 ---
 
@@ -350,6 +480,17 @@ Multi-tenant qatlami Cowork sessiyasida yozilgan va u yerda sinovdan o'tgan,
 keyin patch sifatida repoga ko'chirilgan. Cowork'dan GitHub'ga push
 bloklangani uchun shunday qilingan. **Bundan keyin ish to'g'ridan-to'g'ri shu
 repoda davom etadi** — relay kerak emas.
+
+**2026-08-16 — birinchi jonli kun.** Ikkita mijoz ulandi (Hadicha Market,
+Sherzod Market), Bito'dan haqiqiy savdo keldi (10 498 mahsulot, 11 625 ombor
+yozuvi). 11 ta PR merge qilindi. Kunning eng katta saboqlari:
+
+1. **Volume'siz ma'lumot yo'qoladi va buni hech kim aytmaydi.** Bizneslar
+   ikki marta o'chdi, sabab uzoq izlandi. `startup_checks()` shu uchun bor.
+2. **Xato xabari kesilsa tashxis to'xtaydi.** `str(e)[:100]` Bito'ning
+   javob tanasini yeb qo'ygan edi; uni ochgach sabab bir daqiqada topildi.
+3. **"Tuzatildi" deyishdan oldin sanab chiqish kerak.** Do'kon nomini ikki
+   marta tuzatilgan deb aytdim, uchinchi urinishda 20+ joy chiqdi.
 
 Yangi ishni boshlashda: shu faylni o'qing, 6-bo'limdan keyingi punktni oling,
 `multitenant` (yoki merge qilingan bo'lsa `main`) ustida branch oching.
