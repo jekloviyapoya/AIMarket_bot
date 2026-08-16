@@ -64,8 +64,78 @@ _BOOT_THREADS = []
 
 
 def _boot_thread(fn, name=None, module=None, every=None):
+    """Fon ishini ro'yxatga oladi.
+
+    every=None  → fn ning O'ZIDA `while True` sikli bor. U bitta threadda,
+                  DEFAULT_TENANT kontekstida yuritiladi (eski xatti-harakat).
+    every=N     → fn bu TICK: sikli yo'q, bir marta bajariladi. Uni
+                  rejalashtiruvchi har N soniyada, HAR BIR faol biznes
+                  uchun alohida chaqiradi.
+
+    Nega tick afzal: 18 oqim × 50 biznes = 900 thread bo'lib ketmasligi
+    uchun. Rejalashtiruvchi bitta thread + kichik pool bilan ishlaydi.
+    """
     _BOOT_THREADS.append((fn, name or getattr(fn, '__name__', '?'),
                           module, every))
+
+
+# ─────────────── Fon ishlari rejalashtiruvchisi ───────────────
+
+_TICK_JOBS = []          # (fn, nom, modul, davr) — every berilganlari
+_TICK_LAST = {}          # (nom, slug) -> oxirgi bajarilgan vaqt
+_TICK_RUNNING = set()    # bir ish tugamasdan qayta boshlanmasin
+_TICK_LOCK = threading.RLock()
+SCHEDULER_STEP = 5       # rejalashtiruvchi necha soniyada bir aylanadi
+
+
+def _due_ticks(now, last, running):
+    """Shu daqiqada bajarilishi kerak bo'lgan (ish, biznes) juftliklari.
+
+    Alohida funksiya — sinovdan o'tkazish uchun (sikldan ajratilgan).
+    """
+    out = []
+    for fn, name, module, every in _TICK_JOBS:
+        for slug in TEN.active_slugs(module):
+            key = (name, slug)
+            if key in running:
+                continue                      # oldingisi hali tugamagan
+            if now - last.get(key, 0) < every:
+                continue                      # vaqti kelmagan
+            out.append((fn, slug, name, key))
+    return out
+
+
+def _run_tick(fn, slug, name, key):
+    """Bitta ishni bitta biznes kontekstida bajaradi.
+
+    Bir biznesdagi xato qolganlarini to'xtatmaydi.
+    """
+    try:
+        with tenant_ctx(slug):
+            fn()
+    except Exception as e:
+        print(f"TICK ERR [{slug}] {name}: {str(e)[:150]}", flush=True)
+    finally:
+        with _TICK_LOCK:
+            _TICK_RUNNING.discard(key)
+
+
+def _scheduler_loop():
+    from concurrent.futures import ThreadPoolExecutor
+    pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="tick")
+    while True:
+        try:
+            now = time.time()
+            with _TICK_LOCK:
+                due = _due_ticks(now, _TICK_LAST, _TICK_RUNNING)
+                for fn, slug, name, key in due:
+                    _TICK_LAST[key] = now
+                    _TICK_RUNNING.add(key)
+            for fn, slug, name, key in due:
+                pool.submit(_run_tick, fn, slug, name, key)
+        except Exception as e:
+            print("SCHEDULER ERR:", str(e)[:150], flush=True)
+        time.sleep(SCHEDULER_STEP)
 
 
 
@@ -2892,15 +2962,23 @@ def abc_rule_template(message):
     bot.send_message(message.chat.id, f"✅ Qoida saqlandi! Endi har kuni tekshiriladi va mos mijozlar uchun "
                                        f"avtomatik vazifa beriladi (bir mijozga oyiga 1 marta).")
 
-def abc_auto_task_thread():
-    """Har kuni bir marta: barcha faol qoidalarni tekshirib, mos segmentdagi
-    mijozlar uchun (oyiga 1 marta) avtomatik vazifa yaratadi."""
-    last_run_date = None
-    while True:
+# Oxirgi ishga tushgan sana — TDict bo'lgani uchun HAR BIZNESDA alohida.
+# Oddiy o'zgaruvchi bo'lsa, bitta biznes ishga tushgach qolganlari o'sha
+# kuni o'tkazib yuborilardi.
+_ABC_LAST_RUN = TDict()
+
+
+def abc_auto_task_tick():
+    """Har kuni 09:30 da: faol qoidalar bo'yicha mos segmentdagi mijozlar
+    uchun (oyiga 1 marta) avtomatik vazifa yaratadi.
+
+    Har 5 daqiqada chaqiriladi, ishni faqat 09:30 da bajaradi.
+    """
+    if True:
         try:
             cur_date = today_str()
-            if cur_date != last_run_date and now_dt().strftime("%H:%M") == "09:30":
-                last_run_date = cur_date
+            if cur_date != _ABC_LAST_RUN.get("date") and now_dt().strftime("%H:%M") == "09:30":
+                _ABC_LAST_RUN["date"] = cur_date
                 rules = qall("SELECT id, segment, employee_tg_id, task_template FROM abc_rules WHERE enabled=1")
                 if rules:
                     df, dt_ = _abc_period_month()
@@ -2934,8 +3012,7 @@ def abc_auto_task_thread():
                             except Exception as e:
                                 print("ABC TASK SEND ERR:", str(e)[:120], flush=True)
         except Exception as e:
-            print("ABC AUTO TASK THREAD ERR:", str(e)[:150], flush=True)
-        time.sleep(300)  # har 5 daqiqada tekshiradi (faqat 09:30 da ishga tushadi)
+            print("ABC AUTO TASK ERR:", str(e)[:150], flush=True)
 # ══════════════════════════════════════════════════════════════════
 
 # ══════════════════════════════════════════════════════════════════
@@ -4933,8 +5010,12 @@ def get_daily_sales_total(date=None):
     return float(r[0]) if r else 0
 
 # Background threads
-def reminder_thread():
-    while True:
+def reminder_tick():
+    """Bajarilmagan vazifalar uchun eslatma — har 60 soniyada, HAR BIZNESDA.
+
+    Ilgari `while True` sikli edi va faqat bitta biznesda ishlardi.
+    """
+    if True:
         try:
             # claimed_by>0 — vazifani boshqa xodim topshirgan, bunga eslatma kerak emas
             # pending_delivery=1 — vazifa hali yuborilmagan (xodim ishda emas), eslatma ham kerak emas
@@ -4955,7 +5036,6 @@ def reminder_thread():
                     q("UPDATE tasks SET last_reminded=? WHERE id=?", (now_str(), tid))
                 except: pass
         except: pass
-        time.sleep(60)
 
 def tips_thread():
     while True:
@@ -5084,7 +5164,7 @@ def dashboard_cache_warmer_thread():
         loop_count += 1
         time.sleep(120)
 
-_boot_thread(reminder_thread, module="jamoa")
+_boot_thread(reminder_tick, module="jamoa", every=60)
 _boot_thread(tips_thread, module="jamoa")
 # daily_sale_thread o'chirildi — savdo endi Bito'dan avtomatik olinadi
 _boot_thread(bito_sale_thread, module="moliya")
@@ -5092,7 +5172,7 @@ _boot_thread(bito_employee_bonus_thread, module="moliya")
 _boot_thread(stock_alert_thread, module="ombor")
 _boot_thread(ai_advice_thread, module="ai")
 _boot_thread(license_check_thread)
-_boot_thread(abc_auto_task_thread, module="mijozlar")
+_boot_thread(abc_auto_task_tick, module="mijozlar", every=300)
 _boot_thread(dashboard_cache_warmer_thread)
 # 📣 promo_daily_thread pastroqda aniqlanadi — start ham o'sha yerda emas,
 # bu yerda emas (NameError bo'lardi); qidiring: PROMO_THREAD_START
@@ -22259,15 +22339,31 @@ _boot_thread(_tenant_boot)
 def _start_boot_threads():
     """Kechiktirilgan fon oqimlarini ishga tushiradi.
 
-    1-bosqichda har bir oqim STANDART tenant kontekstida ishlaydi — ya'ni
-    hozirgi xatti-harakat aynan saqlanadi. 5-bosqichda ular bitta
-    rejalashtiruvchi orqali barcha tenantlar bo'ylab aylanadigan bo'ladi
-    (18 oqim × 50 biznes = 900 thread bo'lib ketmasligi uchun).
+    • every=None bo'lganlar — o'z sikli bor, bitta threadda DEFAULT_TENANT
+      kontekstida (eski xatti-harakat, o'zgarmagan)
+    • every=N bo'lganlar — rejalashtiruvchiga topshiriladi va HAR BIR faol
+      biznes uchun alohida bajariladi
+
+    Konvertatsiya bosqichma-bosqich: har bir oqim tick'ga o'tkazilgach, u
+    avtomatik barcha bizneslarda ishlay boshlaydi.
     """
-    for fn, name, module, every in _BOOT_THREADS:
+    loops = [j for j in _BOOT_THREADS if not j[3]]
+    ticks = [j for j in _BOOT_THREADS if j[3]]
+    _TICK_JOBS.extend(ticks)
+
+    for fn, name, module, every in loops:
         threading.Thread(target=TEN.in_ctx(TEN.DEFAULT_TENANT, fn),
                          name=name, daemon=True).start()
-    print(f"🧵 {len(_BOOT_THREADS)} ta fon oqimi ishga tushdi", flush=True)
+    if ticks:
+        threading.Thread(target=_scheduler_loop, name="scheduler",
+                         daemon=True).start()
+
+    try:
+        n_biz = len(TEN.active_slugs())
+    except Exception:
+        n_biz = 0
+    print(f"🧵 {len(loops)} ta eski oqim + {len(ticks)} ta rejalashtirilgan "
+          f"ish ({n_biz} biznes bo'ylab) ishga tushdi", flush=True)
 
 
 def main():
