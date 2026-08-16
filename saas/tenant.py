@@ -479,7 +479,18 @@ class _Cfg:
     # --- Bito ---
     @property
     def BITO_API_KEY(self):
-        return os.getenv("BITO_API_KEY") or self._bito("api_key")
+        key = os.getenv("BITO_API_KEY") or self._bito("api_key")
+        # Sarlavha latin-1 da yuboriladi. Bazada yaroqsiz kalit qolib ketgan
+        # bo'lsa, uni qaytarsak har bir chaqiruv UnicodeEncodeError bilan
+        # yiqiladi — o'rniga "kalit yo'q" deb ko'rsatamiz, kod buni toza
+        # boshqaradi.
+        try:
+            key.encode("latin-1")
+        except (UnicodeEncodeError, AttributeError):
+            print("BITO: saqlangan kalit yaroqsiz (lotin bo'lmagan belgi) — "
+                  "e'tiborga olinmadi", flush=True)
+            return ""
+        return key
 
     @property
     def BITO_ORG_ID(self):

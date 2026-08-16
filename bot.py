@@ -11284,10 +11284,24 @@ def onboard_skip_bito(message):
     _ask_shop_location(tg_id, slug)
 
 
+def _is_menu_text(txt):
+    """Bu matn menyu tugmasi yoki guruh nomimi?
+
+    Onboarding paytida foydalanuvchi klaviaturadagi tugmani bossa, uning
+    matni Bito kaliti deb qabul qilinmasligi kerak.
+    """
+    if not txt:
+        return False
+    if txt in ALL_MENU_BTNS or txt == "⬅️ Asosiy menyu":
+        return True
+    return txt in menu_groups("adm") or txt in menu_groups("emp")
+
+
 @bot.message_handler(func=lambda m: (m.from_user.id in W_ONBOARD
                                      and W_ONBOARD[m.from_user.id].get("step") == "bito"
                                      and (m.text or "").strip()
-                                     and not (m.text or "").startswith("/")))
+                                     and not (m.text or "").startswith("/")
+                                     and not _is_menu_text((m.text or "").strip())))
 def onboard_bito_key(message):
     tg_id = message.from_user.id
     slug = W_ONBOARD[tg_id]["slug"]
@@ -11296,24 +11310,37 @@ def onboard_bito_key(message):
     if not t:
         W_ONBOARD.pop(tg_id, None)
         return
+    problem = CENTRAL.bito_key_problem(key)
+    if problem:
+        bot.send_message(tg_id,
+                         f"⚠️ Bu API kalitga o'xshamaydi — {problem}.\n\n"
+                         f"Bito kalitini qaytadan yuboring yoki /keyinroq deb yozing.")
+        return
     CENTRAL.set_bito_key(t["id"], key)
     bot.send_message(tg_id, "⏳ Kalit tekshirilmoqda va sozlamalar aniqlanmoqda...")
 
     def run():
+        found = {}
         with tenant_ctx(slug):
             try:
-                bito_autodetect_config()
-                n = _sync_bito_to_central(t["id"])
+                # Muvaffaqiyat AYNAN shu chaqiruv natijasiga qarab aniqlanadi.
+                # Ilgari _sync_bito_to_central() ning soni ishlatilardi — u esa
+                # bazada ALLAQACHON turgan sozlamalarni sanardi, shuning uchun
+                # yaroqsiz kalitda ham "✅ Bito ulandi" deb yozardi.
+                found = bito_autodetect_config() or {}
+                _sync_bito_to_central(t["id"])
             except Exception as e:
                 print("ONBOARD BITO ERR:", str(e)[:150], flush=True)
-                n = 0
-        if n:
+        if found:
             W_ONBOARD.pop(tg_id, None)
             bot.send_message(tg_id,
-                             f"✅ Bito ulandi — {n} ta sozlama avtomatik aniqlandi.",
-                             parse_mode="HTML")
+                             f"✅ Bito ulandi — {len(found)} ta sozlama "
+                             f"avtomatik aniqlandi.", parse_mode="HTML")
             _ask_shop_location(tg_id, slug)
         else:
+            # Yaroqsiz kalit bazada qolib ketmasin — aks holda keyingi HAR BIR
+            # Bito chaqiruvi shu kalit bilan urinib, xato beraveradi.
+            CENTRAL.set_bito_key(t["id"], "")
             bot.send_message(tg_id,
                              "❌ Kalit ishlamadi yoki ruxsat yetarli emas.\n"
                              "Qaytadan yuboring yoki /keyinroq deb yozing.")

@@ -729,10 +729,40 @@ BITO_FIELDS = ["org_id", "warehouse_id", "currency_id", "sale_price_id",
                "box_type_id", "wo_reason_id"]
 
 
+def bito_key_problem(key):
+    """Kalit yaroqlimi? Muammo bo'lsa sababini, aks holda "" qaytaradi.
+
+    Eng muhimi latin-1 tekshiruvi: kalit HTTP sarlavhasiga qo'yiladi, u esa
+    latin-1 da kodlanadi. Emoji tushib qolsa HAR BIR Bito chaqiruvi
+    UnicodeEncodeError bilan yiqiladi (amalda shunday bo'ldi: onboarding
+    paytida menyu tugmasi bosilib, "👥 Xodimlar" matni kalit sifatida
+    saqlanib qolgan edi).
+    """
+    k = (key or "").strip()
+    if not k:
+        return "kalit bo'sh"
+    try:
+        k.encode("latin-1")
+    except UnicodeEncodeError:
+        return ("ichida emoji yoki lotin bo'lmagan belgi bor — menyu tugmasini "
+                "bosib yubormadingizmi?")
+    if any(ch.isspace() for ch in k):
+        return "ichida bo'shliq bor"
+    if len(k) < 8:
+        return "juda qisqa"
+    return ""
+
+
 def set_bito_key(tid, api_key):
+    """Bito kalitini shifrlab saqlaydi. Bo'sh qiymat — kalitni o'chiradi."""
+    key = (api_key or "").strip()
+    if key:
+        problem = bito_key_problem(key)
+        if problem:
+            raise ValueError(f"Bito kaliti yaroqsiz: {problem}")
     q("INSERT OR IGNORE INTO tenant_bito (tenant_id) VALUES (?)", (tid,))
     q("UPDATE tenant_bito SET api_key_enc=?, last_error='' WHERE tenant_id=?",
-      (encrypt(api_key.strip()), tid))
+      (encrypt(key), tid))
     _bust_cache()
 
 
