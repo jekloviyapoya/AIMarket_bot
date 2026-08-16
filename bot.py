@@ -5907,12 +5907,23 @@ def generate_zakaz_advice(chat_id, supplier_id, weeks=1):
     if is_license_locked():
         bot.send_message(chat_id, "🔒 Obuna muddati tugagan. To'lovni amalga oshirib, bot egasi bilan bog'laning.")
         return
+    # Firma tanlanmagan bo'lsa manzil `supplier/get-by-id/` bo'lib qoladi va
+    # Bito 400 qaytaradi — sababi ko'rinmagani uchun buni aniq ushlaymiz.
+    supplier_id = (supplier_id or "").strip()
+    if not supplier_id:
+        print("[ZAKAZ] supplier_id BO'SH — ro'yxatdagi firmada _id yo'q "
+              "yoki tugma eskirgan", flush=True)
+        bot.send_message(chat_id,
+                         "⚠️ Firma tanlanmadi. \U0001f6d2 Zakaz tavsiyasi ni "
+                         "qaytadan bosib, ro'yxatdan firmani tanlang.")
+        return
     try:
         _t0 = time.time()  # ⏱ Umumiy vaqt hisoblagichi
         headers = {"api-key": CFG.BITO_API_KEY, "Content-Type": "application/json"}
         base = "https://api.bito.uz/integration-api/integration/api/v2/"
 
         # 1. Firma ma'lumoti
+        print(f"[ZAKAZ] supplier_id={supplier_id!r} weeks={weeks}", flush=True)
         r_sup = requests.get(base + f"supplier/get-by-id/{supplier_id}",
                             headers=headers, timeout=10)
         r_sup.raise_for_status()
