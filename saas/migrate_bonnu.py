@@ -144,8 +144,13 @@ def main():
 
     # 3) Bito
     if a.bito_key:
-        C.set_bito_key(tid, a.bito_key)
-        print("✅ Bito API kaliti shifrlab saqlandi")
+        try:
+            C.set_bito_key(tid, a.bito_key)
+            print("✅ Bito API kaliti shifrlab saqlandi")
+        except ValueError as e:
+            # Migratsiyani to'xtatmaymiz — kalitni keyin bot orqali kiritish
+            # mumkin, qolgan ko'chirish esa allaqachon bajarilgan.
+            print(f"⚠️  {e} — kalit saqlanmadi, keyin qo'lda kiriting")
     cfg = {BITO_MAP[k]: v for k, v in found_bito.items()}
     if cfg:
         C.set_bito_config(tid, **cfg)
