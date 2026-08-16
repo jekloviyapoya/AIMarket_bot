@@ -419,7 +419,11 @@ except Exception:
     pass  # ustun allaqachon mavjud
 
 # Default settings
-for k, v in [("shop_name","Bonus Market"),("shop_open_time","09:00"),
+# ⚠️ shop_name ATAYLAB yo'q: u yozilsa DEFAULT_TENANT bazasiga "Bonus
+# Market" fizik tushib qolardi va biznesning haqiqiy nomi (CFG.SHOP_NAME)
+# hech qachon ko'rinmasdi. Nom markaziy bazadan olinadi; boshliq 🏪 Do'kon
+# nomi orqali o'zgartirsa, o'shanda settings ga yoziladi.
+for k, v in [("shop_open_time","09:00"),
              ("shop_close_time","21:00"),("gps_radius","200"),
              ("tips_time","10:00"),("late_check_time","10:30"),
              ("quiz_enabled","1"),("chat_enabled","1"),("bito_bonus_rate","0.005"),
@@ -13642,6 +13646,8 @@ def _show_settings_cat(chat_id, cat, edit_message_id=None):
         mk.add(B("🕔 Yopilish", callback_data="set_close_time"),
                B("📍 GPS radius", callback_data="set_gps_radius"))
         mk.add(B("📷 Baholash QR", callback_data="rev_qr"))
+        mk.add(B(f"🔌 Bito API kaliti — {_bito_status()}",
+                 callback_data="set_bito_key"))
     elif cat == "emp":
         qe_s = "O'chirish" if v["qe"] == "1" else "Yoqish"
         ce_s = "O'chirish" if v["ce"] == "1" else "Yoqish"
@@ -13787,6 +13793,69 @@ def _show_emp_invites(chat_id, edit_message_id=None):
                      disable_web_page_preview=True)
 
 
+# ════════════ 🔌 BITO API KALITI (⚙️ Sozlamalar) ════════════
+# Onboarding "keyinroq Sozlamalar orqali kiritishingiz mumkin" deb va'da
+# berardi, lekin bunday oyna yo'q edi — kalitni faqat ro'yxatdan o'tish
+# paytida bir marta kiritish mumkin edi.
+
+def _bito_status():
+    """Tugmada ko'rinadigan qisqa holat."""
+    try:
+        tid = CFG.TENANT_ID
+        if not tid:
+            return "biznes aniqlanmadi"
+        key = CENTRAL.get_bito(tid).get("api_key", "") or ""
+    except Exception:
+        return "?"
+    if not key:
+        return "ulanmagan"
+    if CENTRAL.bito_key_problem(key):
+        return "🔴 yaroqsiz"
+    return "ulangan"
+
+
+def _handle_bito_key_input(message, value):
+    """⚙️ Sozlamalar orqali kiritilgan Bito kaliti."""
+    tg_id = message.from_user.id
+    tid = CFG.TENANT_ID
+    slug = TEN.current()
+    if not tid:
+        bot.send_message(tg_id, "⚠️ Biznes aniqlanmadi.")
+        return
+    if value in ("-", "0", "o'chir"):
+        CENTRAL.set_bito_key(tid, "")
+        bot.send_message(tg_id, "🗑 Bito kaliti o'chirildi.")
+        return
+    problem = CENTRAL.bito_key_problem(value)
+    if problem:
+        bot.send_message(tg_id,
+                         f"⚠️ Bu API kalitga o'xshamaydi — {problem}.\n\n"
+                         f"Qaytadan urinib ko'ring: ⚙️ Sozlamalar → 🏪 Do'kon "
+                         f"sozlamalari → 🔌 Bito API kaliti")
+        return
+    CENTRAL.set_bito_key(tid, value)
+    bot.send_message(tg_id, "⏳ Kalit tekshirilmoqda va sozlamalar aniqlanmoqda...")
+
+    def run():
+        found = {}
+        with tenant_ctx(slug):
+            try:
+                found = bito_autodetect_config() or {}
+                _sync_bito_to_central(tid)
+            except Exception as e:
+                print("SOZLAMA BITO ERR:", str(e)[:150], flush=True)
+        if found:
+            bot.send_message(tg_id,
+                             f"✅ Bito ulandi — {len(found)} ta sozlama "
+                             f"avtomatik aniqlandi.")
+        else:
+            CENTRAL.set_bito_key(tid, "")     # yaroqsiz kalit qolib ketmasin
+            bot.send_message(tg_id,
+                             "❌ Kalit ishlamadi yoki ruxsat yetarli emas. "
+                             "Kalit saqlanmadi.")
+    threading.Thread(target=run, daemon=True).start()
+
+
 @bot.callback_query_handler(func=lambda c: c.data.startswith("set_"))
 def settings_cb(call):
     if get_role(call.from_user.id) != 'boss':
@@ -13800,6 +13869,17 @@ def settings_cb(call):
     if action.startswith("set_cat_"):
         _show_settings_cat(call.message.chat.id, action[8:],
                            edit_message_id=call.message.message_id)
+        return
+    # ── 🔌 Bito API kaliti ──
+    if action == "set_bito_key":
+        W_SETTING[call.from_user.id] = "__bito_key__"
+        bot.send_message(call.message.chat.id,
+                         f"🔌 <b>Bito API kaliti</b>\n\n"
+                         f"Hozirgi holat: <b>{_bito_status()}</b>\n\n"
+                         f"Bito'dagi API kalitingizni yuboring — savdo, ombor "
+                         f"va nakladnoy bo'limlari shu orqali ishlaydi.\n\n"
+                         f"O'chirish uchun <code>-</code> yuboring.",
+                         parse_mode="HTML")
         return
     # ── 🔗 Hodim taklif havolalari ──
     if action == "set_emp_invites":
@@ -14091,8 +14171,14 @@ def handle_stock_search(message):
 
 @bot.message_handler(func=lambda m: m.from_user.id in W_SETTING)
 def handle_setting(message):
-    if message.text in MENU_TEXTS: W_SETTING.pop(message.from_user.id,None); return
+    # Menyu tugmasi yoki guruh nomi bosilsa — sozlama qiymati deb qabul
+    # qilinmasin (Bito kaliti o'rniga "👥 Xodimlar" saqlanib qolgan holat).
+    if message.text in MENU_TEXTS or _is_menu_text((message.text or "").strip()):
+        W_SETTING.pop(message.from_user.id, None); return
     mgr_id = message.from_user.id; key = W_SETTING.pop(mgr_id); value = message.text.strip()
+    if key == "__bito_key__":
+        _handle_bito_key_input(message, value)
+        return
     if "time" in key and key not in ("stock_alert_times", "emp_report_time", "ai_advice_times"):
         try: datetime.strptime(value, "%H:%M")
         except: bot.send_message(message.chat.id, "❌ Format: `HH:MM`", parse_mode="Markdown"); return
